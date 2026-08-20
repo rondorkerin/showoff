@@ -1,0 +1,46 @@
+{
+  "name": "showoff",
+  "version": "0.1.0",
+  "description": "Record your screen and your voice. Get posted-ready clips.",
+  "main": "./out/main/index.js",
+  "author": "Nick Bryant",
+  "license": "MIT",
+  "homepage": "https://github.com/rondorkerin/showoff",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rondorkerin/showoff.git"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "start": "electron-vite preview",
+    "pack:mac": "electron-vite build && electron-builder --mac --publish never",
+    "pack:win": "electron-vite build && electron-builder --win --publish never",
+    "release": "electron-vite build && electron-builder --mac --win --publish always",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.5",
+    "@electric-sql/pglite-pgvector": "^0.0.6",
+    "electron-updater": "^6.8.9",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.6"
+  }
+}

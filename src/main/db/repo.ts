@@ -6,9 +6,12 @@ import type {
   Note,
   Project,
   Recording,
-  Track,
   TranscriptSegment,
-  TrackKind
+  Lane,
+  LaneKind,
+  LaneFrame,
+  LanePatch,
+  Aspect
 } from '../../shared/types.ts'
 import type { PlatformId } from '../../shared/platforms.ts'
 
@@ -104,37 +107,121 @@ export async function deleteRecording(id: string): Promise<void> {
   await query('DELETE FROM recordings WHERE id=$1', [id])
 }
 
-/* -------------------------------------------------------------------- tracks */
+/* --------------------------------------------------------------------- lanes */
 
-export async function addTrack(
-  recordingId: string,
-  kind: TrackKind,
-  path: string,
-  durationMs: number | null
-): Promise<Track> {
-  const id = newId('trk')
+export async function addLane(input: {
+  recordingId: string
+  kind: LaneKind
+  label?: string
+  path: string
+  sourceMs?: number | null
+  offsetMs?: number
+  z?: number
+  gain?: number
+  ducks?: boolean
+  frame?: LaneFrame
+}): Promise<Lane> {
+  const id = newId('lan')
+  const frame = input.frame ? { default: input.frame } : {}
   await query(
-    'INSERT INTO tracks (id, recording_id, kind, path, duration_ms) VALUES ($1,$2,$3,$4,$5)',
-    [id, recordingId, kind, path, durationMs]
+    `INSERT INTO lanes (id, recording_id, kind, label, path, source_ms, offset_ms, z, gain, ducks, frame)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [
+      id,
+      input.recordingId,
+      input.kind,
+      input.label ?? defaultLabel(input.kind),
+      input.path,
+      input.sourceMs ?? null,
+      input.offsetMs ?? 0,
+      input.z ?? (input.kind === 'webcam' ? 10 : 0),
+      input.gain ?? 1,
+      input.ducks ?? input.kind === 'voiceover',
+      JSON.stringify(frame)
+    ]
   )
-  return (await one<Track>('SELECT * FROM tracks WHERE id=$1', [id]))!
+  return (await one<Lane>('SELECT * FROM lanes WHERE id=$1', [id]))!
 }
 
-export async function listTracks(recordingId: string): Promise<Track[]> {
-  return query<Track>('SELECT * FROM tracks WHERE recording_id=$1 ORDER BY created_at', [
-    recordingId
-  ])
+function defaultLabel(kind: LaneKind): string {
+  switch (kind) {
+    case 'screen':
+      return 'Screen'
+    case 'webcam':
+      return 'Webcam'
+    case 'mic':
+      return 'Mic'
+    case 'system':
+      return 'Computer audio'
+    case 'voiceover':
+      return 'Voice-over'
+  }
 }
 
-export async function deleteTrack(recordingId: string, kind: TrackKind): Promise<void> {
-  await query('DELETE FROM tracks WHERE recording_id=$1 AND kind=$2', [recordingId, kind])
+/**
+ * Video lanes first, highest z last, so the caller can overlay in array order
+ * and get the stacking right without sorting again.
+ */
+export async function listLanes(recordingId: string): Promise<Lane[]> {
+  return query<Lane>(
+    'SELECT * FROM lanes WHERE recording_id=$1 ORDER BY z ASC, created_at ASC',
+    [recordingId]
+  )
 }
 
-export async function getTrack(recordingId: string, kind: TrackKind): Promise<Track | null> {
-  return one<Track>('SELECT * FROM tracks WHERE recording_id=$1 AND kind=$2 LIMIT 1', [
-    recordingId,
-    kind
-  ])
+export async function getLane(id: string): Promise<Lane | null> {
+  return one<Lane>('SELECT * FROM lanes WHERE id=$1', [id])
+}
+
+/** Convenience for the pipeline, which still thinks in one-lane-per-kind terms. */
+export async function firstLane(recordingId: string, kind: LaneKind): Promise<Lane | null> {
+  return one<Lane>(
+    'SELECT * FROM lanes WHERE recording_id=$1 AND kind=$2 ORDER BY created_at LIMIT 1',
+    [recordingId, kind]
+  )
+}
+
+export async function updateLane(id: string, patch: LanePatch): Promise<Lane | null> {
+  const sets: string[] = []
+  const args: unknown[] = [id]
+  const put = (col: string, value: unknown): void => {
+    args.push(value)
+    sets.push(`${col}=$${args.length}`)
+  }
+  if (patch.label !== undefined) put('label', patch.label)
+  if (patch.offsetMs !== undefined) put('offset_ms', Math.max(0, Math.round(patch.offsetMs)))
+  if (patch.inMs !== undefined) put('in_ms', Math.max(0, Math.round(patch.inMs)))
+  if (patch.outMs !== undefined) {
+    put('out_ms', patch.outMs === null ? null : Math.max(0, Math.round(patch.outMs)))
+  }
+  if (patch.z !== undefined) put('z', Math.round(patch.z))
+  if (patch.enabled !== undefined) put('enabled', patch.enabled)
+  if (patch.gain !== undefined) put('gain', Math.max(0, Math.min(3, patch.gain)))
+  if (patch.ducks !== undefined) put('ducks', patch.ducks)
+
+  // Framing is per aspect, so a patch merges one key rather than replacing the
+  // object -- otherwise moving the webcam in 16:9 would wipe its 9:16 position.
+  if (patch.frame) {
+    const key = patch.aspect && patch.aspect !== 'source' ? patch.aspect : 'default'
+    args.push(JSON.stringify({ [key]: patch.frame }))
+    sets.push(`frame = frame || $${args.length}::jsonb`)
+  }
+
+  if (sets.length === 0) return getLane(id)
+  await query(`UPDATE lanes SET ${sets.join(', ')} WHERE id=$1`, args)
+  return getLane(id)
+}
+
+export async function deleteLane(id: string): Promise<void> {
+  await query('DELETE FROM lanes WHERE id=$1', [id])
+}
+
+export async function setLanePath(id: string, path: string): Promise<void> {
+  await query('UPDATE lanes SET path=$2 WHERE id=$1', [id, path])
+}
+
+export async function setAspect(recordingId: string, aspect: Aspect): Promise<void> {
+  await query('UPDATE recordings SET aspect=$2 WHERE id=$1', [recordingId, aspect])
 }
 
 /* --------------------------------------------------------------- transcripts */

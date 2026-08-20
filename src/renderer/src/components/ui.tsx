@@ -120,18 +120,26 @@ export function Toggle({
   checked,
   onChange,
   label,
-  hint
+  hint,
+  disabled
 }: {
   checked: boolean
   onChange: (v: boolean) => void
   label: string
   hint?: string
+  disabled?: boolean
 }): React.ReactElement {
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-start gap-3 rounded-[10px] px-1 py-1.5 text-left hover:bg-[#171a1f] no-drag"
+      className={cls(
+        'flex w-full items-start gap-3 rounded-[10px] px-1 py-1.5 text-left no-drag',
+        disabled ? 'cursor-not-allowed opacity-45' : 'hover:bg-[#171a1f]'
+      )}
     >
       <span
         className={cls(

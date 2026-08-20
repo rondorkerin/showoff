@@ -179,5 +179,61 @@ CREATE TABLE IF NOT EXISTS recording_answers (
 );
 CREATE INDEX IF NOT EXISTS answers_recording_idx ON recording_answers (recording_id);
 `
+  },
+  {
+    id: 4,
+    name: 'lanes',
+    sql: `
+-- Lanes replace tracks. A track was one row per kind per recording, looked up
+-- with LIMIT 1, which made a second screen share impossible to represent. A
+-- lane is one source clip placed on the timeline, and there can be as many as
+-- you like.
+ALTER TABLE recordings ADD COLUMN IF NOT EXISTS aspect TEXT NOT NULL DEFAULT 'source';
+
+CREATE TABLE IF NOT EXISTS lanes (
+  id           TEXT PRIMARY KEY,
+  recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL,
+  label        TEXT NOT NULL DEFAULT '',
+  path         TEXT NOT NULL,
+  source_ms    INTEGER,
+  offset_ms    INTEGER NOT NULL DEFAULT 0,
+  in_ms        INTEGER NOT NULL DEFAULT 0,
+  out_ms       INTEGER,
+  z            INTEGER NOT NULL DEFAULT 0,
+  enabled      BOOLEAN NOT NULL DEFAULT true,
+  gain         REAL NOT NULL DEFAULT 1,
+  ducks        BOOLEAN NOT NULL DEFAULT false,
+  frame        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS lanes_recording_idx ON lanes (recording_id, z, created_at);
+
+-- Carry every existing track over so a v0.1.3 library opens in the editor.
+-- Paths are corrected against what is actually on disk at load time by
+-- reconcileLanes() -- SQL cannot stat a file.
+INSERT INTO lanes (id, recording_id, kind, label, path, source_ms, z, ducks, frame)
+SELECT
+  'lan_' || t.id,
+  t.recording_id,
+  t.kind,
+  CASE t.kind
+    WHEN 'screen' THEN 'Screen'
+    WHEN 'webcam' THEN 'Webcam'
+    WHEN 'mic' THEN 'Mic'
+    WHEN 'voiceover' THEN 'Voice-over'
+    ELSE t.kind
+  END,
+  t.path,
+  t.duration_ms,
+  CASE t.kind WHEN 'webcam' THEN 10 ELSE 0 END,
+  CASE t.kind WHEN 'voiceover' THEN true ELSE false END,
+  CASE t.kind
+    WHEN 'webcam' THEN '{"default":{"x":0.86,"y":0.85,"scale":0.24}}'::jsonb
+    ELSE '{}'::jsonb
+  END
+FROM tracks t
+WHERE NOT EXISTS (SELECT 1 FROM lanes l WHERE l.id = 'lan_' || t.id);
+`
   }
 ]

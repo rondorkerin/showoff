@@ -2,14 +2,14 @@ import { app } from 'electron'
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
 import * as repo from './db/repo.ts'
-import { muxTracks, posterFrame, probeWithDecode, remuxToMp4 } from './media/render.ts'
+import { posterFrame, probe, probeWithDecode, remuxToMp4 } from './media/render.ts'
 import { getSettings } from './settings.ts'
 import { EmptyRecordingError, NotFoundError } from '../shared/errors.ts'
-import type { TrackKind } from '../shared/types.ts'
+import { DEFAULT_FRAME, FULL_FRAME, isVideoLane, type LaneKind } from '../shared/types.ts'
 import { log } from './log.ts'
 
 interface OpenTrack {
-  kind: TrackKind
+  kind: LaneKind
   partPath: string
   stream: WriteStream
   bytes: number
@@ -18,7 +18,7 @@ interface OpenTrack {
 interface Session {
   recordingId: string
   dir: string
-  tracks: Map<TrackKind, OpenTrack>
+  tracks: Map<LaneKind, OpenTrack>
   startedAt: number
 }
 
@@ -33,7 +33,7 @@ function timestampSlug(): string {
 export async function startRecording(input: {
   title: string
   projectId: string | null
-  kinds: TrackKind[]
+  kinds: LaneKind[]
 }): Promise<{ recordingId: string; dir: string }> {
   const settings = getSettings()
   const slug = timestampSlug()
@@ -46,7 +46,7 @@ export async function startRecording(input: {
     projectId: input.projectId
   })
 
-  const tracks = new Map<TrackKind, OpenTrack>()
+  const tracks = new Map<LaneKind, OpenTrack>()
   for (const kind of input.kinds) {
     // .part while writing: an interrupted recording is visibly incomplete
     // rather than a truncated file that looks whole.
@@ -69,7 +69,7 @@ export async function startRecording(input: {
  * memory: a 20 minute screen capture is gigabytes, and a crash mid-session must
  * still leave a playable file behind.
  */
-export function writeChunk(recordingId: string, kind: TrackKind, chunk: Uint8Array): void {
+export function writeChunk(recordingId: string, kind: LaneKind, chunk: Uint8Array): void {
   const session = sessions.get(recordingId)
   if (!session) throw NotFoundError('Recording session')
   const track = session.tracks.get(kind)
@@ -126,7 +126,7 @@ export async function finalizeRecording(
   }
 
   // Promote .part files now they are complete.
-  const finished = new Map<TrackKind, string>()
+  const finished = new Map<LaneKind, string>()
   for (const t of written) {
     if (t.bytes === 0) {
       try {
@@ -145,74 +145,169 @@ export async function finalizeRecording(
   const screenWebm = finished.get('screen')
   const micWebm = finished.get('mic')
   const camWebm = finished.get('webcam')
+  const sysWebm = finished.get('system')
 
   if (!screenWebm && !camWebm) {
     await repo.failRecording(recordingId, 'No video track was captured.')
     throw EmptyRecordingError('no video track was captured')
   }
 
-  onProgress('Converting video', 0.2)
-  const videoSource = screenWebm ?? camWebm!
-  const masterMp4 = join(session.dir, 'master.mp4')
+  // Every source becomes its own file and its own lane. Nothing is baked
+  // together here: the mix belongs to the editor, and a finalize step that
+  // burned the mic into the screen is exactly what made the old voice-over
+  // unusable -- you could add narration but never take the original back out.
+  const made: Array<{ kind: LaneKind; path: string; info: Awaited<ReturnType<typeof remuxToMp4>> }> = []
 
-  let masterInfo
-  if (micWebm) {
-    // Screen and mic were recorded as separate tracks: mux them so the master
-    // is one file, but keep the originals so nothing is destroyed.
-    const videoMp4 = join(session.dir, 'screen.mp4')
-    await remuxToMp4(videoSource, videoMp4)
-    const micMp4 = join(session.dir, 'mic.m4a')
-    await remuxToMp4(micWebm, micMp4)
-    onProgress('Combining tracks', 0.6)
-    masterInfo = await muxTracks(videoMp4, micMp4, masterMp4)
-  } else {
-    masterInfo = await remuxToMp4(videoSource, masterMp4)
+  const convert = async (
+    kind: LaneKind,
+    webm: string,
+    outName: string,
+    stage: string,
+    at: number
+  ): Promise<void> => {
+    onProgress(stage, at)
+    const out = join(session.dir, outName)
+    let info = await remuxToMp4(webm, out)
+    if (info.durationMs === 0) info = await probeWithDecode(out)
+    made.push({ kind, path: out, info })
   }
 
-  if (masterInfo.durationMs === 0) {
-    const measured = await probeWithDecode(masterMp4)
-    masterInfo = measured
-  }
+  if (screenWebm) await convert('screen', screenWebm, 'screen.mp4', 'Converting screen', 0.2)
+  if (camWebm) await convert('webcam', camWebm, 'webcam.mp4', 'Converting webcam', 0.5)
+  if (micWebm) await convert('mic', micWebm, 'mic.m4a', 'Converting microphone', 0.7)
+  if (sysWebm) await convert('system', sysWebm, 'system.m4a', 'Converting computer audio', 0.8)
 
-  let camMp4: string | null = null
-  if (camWebm && screenWebm) {
-    onProgress('Converting webcam', 0.8)
-    camMp4 = join(session.dir, 'webcam.mp4')
-    await remuxToMp4(camWebm, camMp4)
-  }
+  const primary = made.find((m) => m.kind === 'screen') ?? made.find((m) => m.kind === 'webcam')!
+  const durationMs = made.reduce((n, m) => Math.max(n, m.info.durationMs), 0)
 
   onProgress('Making thumbnail', 0.9)
   let poster: string | null = null
   try {
-    poster = await posterFrame(masterMp4, join(session.dir, 'poster.jpg'), Math.min(1, masterInfo.durationMs / 2000), 640)
+    poster = await posterFrame(
+      primary.path,
+      join(session.dir, 'poster.jpg'),
+      Math.min(1, durationMs / 2000),
+      640
+    )
   } catch (e) {
     log.warn('recording', 'poster frame failed', { error: String(e) })
   }
 
-  await repo.addTrack(recordingId, 'screen', masterMp4, masterInfo.durationMs)
-  if (camMp4) await repo.addTrack(recordingId, 'webcam', camMp4, masterInfo.durationMs)
-  if (micWebm) await repo.addTrack(recordingId, 'mic', micWebm, masterInfo.durationMs)
+  for (const m of made) {
+    // The webcam sits bottom-right at a quarter width unless the recording is
+    // webcam-only, in which case it is the whole picture.
+    const isPip = m.kind === 'webcam' && m !== primary
+    await repo.addLane({
+      recordingId,
+      kind: m.kind,
+      path: m.path,
+      sourceMs: m.info.durationMs || durationMs,
+      z: isPip ? 10 : 0,
+      frame: isVideoLane(m.kind) ? (isPip ? DEFAULT_FRAME : FULL_FRAME) : undefined
+    })
+  }
 
   await repo.finishRecording(recordingId, {
-    durationMs: masterInfo.durationMs,
-    width: masterInfo.width,
-    height: masterInfo.height,
+    durationMs,
+    width: primary.info.width,
+    height: primary.info.height,
     posterPath: poster
   })
 
   log.info('recording', 'finalized', {
     recordingId,
-    durationMs: masterInfo.durationMs,
+    durationMs,
+    lanes: made.length,
     bytes: totalBytes
   })
 
   return {
     recordingId,
-    durationMs: masterInfo.durationMs,
-    width: masterInfo.width,
-    height: masterInfo.height,
+    durationMs,
+    width: primary.info.width,
+    height: primary.info.height,
     posterPath: poster
   }
+}
+
+/* ------------------------------------------------------- adding a source */
+
+/**
+ * Record another source into a recording that already exists.
+ *
+ * A session is not one capture any more. You start with a screen share, and
+ * later you want the same project to also carry your face, or a second window,
+ * or the audio from the call -- each of those is another lane, recorded now and
+ * placed on the timeline afterwards, not a separate recording you then have to
+ * reconcile by hand.
+ */
+export async function startAddSource(
+  recordingId: string,
+  kinds: LaneKind[]
+): Promise<{ dir: string }> {
+  const rec = await repo.getRecording(recordingId)
+  if (!rec) throw NotFoundError('Recording')
+  if (sessions.has(recordingId)) throw new Error('Something is already recording into this project.')
+
+  const existing = await repo.listLanes(recordingId)
+  const tracks = new Map<LaneKind, OpenTrack>()
+  for (const kind of kinds) {
+    const n = existing.filter((l) => l.kind === kind).length + 1
+    const partPath = join(rec.dir, `${kind}-${n}.webm.part`)
+    tracks.set(kind, { kind, partPath, stream: createWriteStream(partPath), bytes: 0 })
+  }
+  sessions.set(recordingId, { recordingId, dir: rec.dir, tracks, startedAt: Date.now() })
+  log.info('recording', 'adding sources', { recordingId, kinds })
+  return { dir: rec.dir }
+}
+
+export async function finalizeAddSource(
+  recordingId: string,
+  onProgress: (stage: string, fraction: number) => void
+): Promise<{ added: number }> {
+  const session = sessions.get(recordingId)
+  if (!session) throw NotFoundError('Recording session')
+
+  onProgress('Closing files', 0.05)
+  for (const t of session.tracks.values()) await closeStream(t)
+  const written = [...session.tracks.values()].filter((t) => t.bytes > 0)
+  sessions.delete(recordingId)
+
+  if (written.length === 0) {
+    await cleanupFiles([...session.tracks.values()].map((t) => t.partPath))
+    throw EmptyRecordingError('the added source captured nothing')
+  }
+
+  const lanes = await repo.listLanes(recordingId)
+  let z = lanes.reduce((n, l) => Math.max(n, l.z), 0)
+  let added = 0
+
+  for (const [i, t] of written.entries()) {
+    const webm = t.partPath.replace(/\.part$/, '')
+    renameSync(t.partPath, webm)
+    const ext = isVideoLane(t.kind) ? '.mp4' : '.m4a'
+    const out = webm.replace(/\.webm$/, ext)
+    onProgress(`Converting ${t.kind}`, 0.1 + (i / written.length) * 0.85)
+    let info = await remuxToMp4(webm, out)
+    if (info.durationMs === 0) info = await probeWithDecode(out)
+
+    // New video arrives on top and in the corner: it is an addition to a shot
+    // that already works, so it must not cover it up.
+    const video = isVideoLane(t.kind)
+    if (video) z += 10
+    await repo.addLane({
+      recordingId,
+      kind: t.kind,
+      path: out,
+      sourceMs: info.durationMs,
+      z: video ? z : 0,
+      frame: video ? DEFAULT_FRAME : undefined
+    })
+    added++
+  }
+
+  log.info('recording', 'sources added', { recordingId, added })
+  return { added }
 }
 
 /** Attach a voice-over track recorded against an existing recording. */
@@ -253,7 +348,8 @@ export async function finalizeVoiceover(recordingId: string): Promise<{ path: st
   renameSync(track.partPath, webm)
   const m4a = join(session.dir, 'voiceover.m4a')
   await remuxToMp4(webm, m4a)
-  await repo.addTrack(recordingId, 'voiceover', m4a, null)
+  const info = await probe(m4a).catch(() => null)
+  await repo.addLane({ recordingId, kind: 'voiceover', path: m4a, sourceMs: info?.durationMs ?? null })
   return { path: m4a }
 }
 
@@ -285,7 +381,8 @@ export async function cancelVoiceover(recordingId: string): Promise<void> {
  * door: every later re-transcribe keeps using it and there is no way back.
  */
 export async function removeVoiceover(recordingId: string): Promise<void> {
-  await repo.deleteTrack(recordingId, 'voiceover')
+  const lane = await repo.firstLane(recordingId, 'voiceover')
+  if (lane) await repo.deleteLane(lane.id)
   log.info('recording', 'voiceover removed', { recordingId })
 }
 

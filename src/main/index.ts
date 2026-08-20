@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, protocol, net, shell, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, Menu, protocol, net, shell, session } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { registerIpc } from './ipc/index.ts'
@@ -124,6 +124,26 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(['media', 'display-capture', 'clipboard-sanitized-write'].includes(permission))
   })
+
+  // Computer audio. The renderer asks for display media purely to get the
+  // loopback track that comes with it -- Electron documents `audio: 'loopback'`
+  // as Windows-only, so everywhere else this handler simply never fires and the
+  // renderer goes through a virtual audio device instead.
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      void desktopCapturer
+        .getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } })
+        .then((sources) => {
+          if (sources.length === 0) return callback({})
+          callback({ video: sources[0], audio: 'loopback' })
+        })
+        .catch((e) => {
+          log.warn('audio', 'loopback request failed', { error: String(e) })
+          callback({})
+        })
+    },
+    { useSystemPicker: false }
+  )
 
   registerMediaProtocol()
   registerIpc()

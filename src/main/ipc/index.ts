@@ -12,15 +12,18 @@ import { basename, join } from 'node:path'
 import * as repo from '../db/repo.ts'
 import * as pipeline from '../pipeline/index.ts'
 import * as recording from '../recording.ts'
+import { reconcileLanes } from '../lanes.ts'
+import { exportRecording, suggestedFilename } from '../export.ts'
+import { installLoopback, loopbackStatus } from '../audio/loopback.ts'
 import { enqueue, queueDepth } from '../jobs/queue.ts'
 import { llmStatuses } from '../llm/index.ts'
 import { sttStatuses } from '../transcribe/index.ts'
 import { installWhisper, whisperInstallRoute } from '../transcribe/install.ts'
 import { getFfmpegPath, getFfprobePath } from '../media/ffmpeg.ts'
 import { defaultSettings, getSettings, saveSettings, resolveKey } from '../settings.ts'
-import { NoCaptureSourcesError, serializeError } from '../../shared/errors.ts'
+import { NoCaptureSourcesError, NotFoundError, serializeError } from '../../shared/errors.ts'
 import { PLATFORMS, type PlatformId } from '../../shared/platforms.ts'
-import type { AppSettings, Diagnostics, TrackKind } from '../../shared/types.ts'
+import type { AppSettings, Aspect, Diagnostics, LaneKind, LanePatch } from '../../shared/types.ts'
 import { getDb } from '../db/index.ts'
 import { log } from '../log.ts'
 import { slugify } from '../pipeline/index.ts'
@@ -108,7 +111,7 @@ export function registerIpc(): void {
     return systemPreferences.getMediaAccessStatus('screen') === 'granted'
   })
 
-  handle('recording:start', (input: { title: string; projectId: string | null; kinds: TrackKind[] }) =>
+  handle('recording:start', (input: { title: string; projectId: string | null; kinds: LaneKind[] }) =>
     recording.startRecording(input)
   )
 
@@ -116,7 +119,7 @@ export function registerIpc(): void {
   // recording and must not round-trip.
   ipcMain.on(
     'recording:chunk',
-    (_e, payload: { recordingId: string; kind: TrackKind; chunk: ArrayBuffer }) => {
+    (_e, payload: { recordingId: string; kind: LaneKind; chunk: ArrayBuffer }) => {
       try {
         recording.writeChunk(payload.recordingId, payload.kind, new Uint8Array(payload.chunk))
       } catch (e) {
@@ -139,6 +142,23 @@ export function registerIpc(): void {
   handle('voiceover:remove', (recordingId: string) => recording.removeVoiceover(recordingId))
   handle('recording:orphans', () => recording.findOrphans())
 
+  handle('source:start', (p: { recordingId: string; kinds: LaneKind[] }) =>
+    recording.startAddSource(p.recordingId, p.kinds)
+  )
+  handle('source:finalize', (recordingId: string) =>
+    enqueue('add-source', recordingId, (onProgress) =>
+      recording.finalizeAddSource(recordingId, onProgress)
+    )
+  )
+  handle('source:cancel', (recordingId: string) => recording.cancelVoiceover(recordingId))
+
+  handle('audio:loopback', () => loopbackStatus())
+  handle('audio:installLoopback', () =>
+    enqueue('loopback', null, (onProgress) =>
+      installLoopback((f, note) => onProgress(note, f))
+    )
+  )
+
   /* -------------------------------------------------------------- library */
 
   handle('projects:list', () => repo.listProjects())
@@ -154,8 +174,8 @@ export function registerIpc(): void {
   handle('recordings:get', async (id: string) => {
     const rec = await repo.getRecording(id)
     if (!rec) return null
-    const [tracks, transcript, clips, renders, note, tags, job] = await Promise.all([
-      repo.listTracks(id),
+    const [lanes, transcript, clips, renders, note, tags, job] = await Promise.all([
+      reconcileLanes(id),
       repo.getTranscript(id),
       repo.listClips(id),
       repo.listRenders(id),
@@ -163,7 +183,7 @@ export function registerIpc(): void {
       repo.getRecordingTags(id),
       repo.latestJob(id)
     ])
-    return { recording: rec, tracks, transcript, clips, renders, note, tags, job }
+    return { recording: rec, lanes, transcript, clips, renders, note, tags, job }
   })
   handle('recordings:update', (p: { id: string; title?: string; projectId?: string | null }) =>
     repo.updateRecording(p.id, p)
@@ -172,6 +192,39 @@ export function registerIpc(): void {
   handle('recordings:tags', (p: { id: string; tags: string[] }) =>
     repo.setRecordingTags(p.id, p.tags)
   )
+  /* ----------------------------------------------------------------- lanes */
+
+  handle('lanes:list', (id: string) => reconcileLanes(id))
+  handle('lanes:update', (p: { id: string; patch: LanePatch }) => repo.updateLane(p.id, p.patch))
+  handle('lanes:delete', (id: string) => repo.deleteLane(id))
+  handle('lanes:aspect', async (p: { recordingId: string; aspect: Aspect }) => {
+    await repo.setAspect(p.recordingId, p.aspect)
+  })
+
+  /* ---------------------------------------------------------------- export */
+
+  handle('export:mp4', async (p: { recordingId: string; aspect?: Aspect; subtitles?: boolean }) => {
+    const rec = await repo.getRecording(p.recordingId)
+    if (!rec) throw NotFoundError('Recording')
+    const aspect = p.aspect ?? rec.aspect ?? 'source'
+
+    // The dialog opens before the job so the user picks the destination while
+    // they are still looking at the editor, not forty seconds later.
+    const chosen = await dialog.showSaveDialog({
+      title: 'Export video',
+      defaultPath: join(app.getPath('videos'), suggestedFilename(rec.title, aspect)),
+      filters: [{ name: 'MP4 video', extensions: ['mp4'] }]
+    })
+    if (chosen.canceled || !chosen.filePath) return null
+
+    return enqueue('export', p.recordingId, (onProgress) =>
+      exportRecording(
+        { recordingId: p.recordingId, outputPath: chosen.filePath, aspect, subtitles: p.subtitles },
+        onProgress
+      )
+    )
+  })
+
   handle('tags:list', () => repo.listAllTags())
   handle('stats', () => repo.recordingStats())
 

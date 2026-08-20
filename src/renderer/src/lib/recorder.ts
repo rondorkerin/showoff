@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, must } from './api.ts'
-import type { TrackKind } from '../../../shared/types.ts'
+import { api, must, soft } from './api.ts'
+import type { LaneKind } from '../../../shared/types.ts'
 
 export type RecorderPhase =
   | 'idle'
@@ -11,7 +11,7 @@ export type RecorderPhase =
   | 'finalizing'
 
 interface TrackRig {
-  kind: TrackKind
+  kind: LaneKind
   stream: MediaStream
   recorder: MediaRecorder
 }
@@ -89,9 +89,57 @@ export interface StartOptions {
   sourceId: string | null
   mic: boolean
   webcam: boolean
+  /** Record what the machine is playing as its own lane. */
+  system?: boolean
   micDeviceId?: string
   webcamDeviceId?: string
   countdownSeconds: number
+  /** Record into an existing recording instead of starting a new one. */
+  attachTo?: string | null
+}
+
+/**
+ * Whatever the machine is playing, as an audio-only stream.
+ *
+ * Windows hands this over natively: the main process answers the display-media
+ * request with `audio: 'loopback'`, so the video track that comes back with it
+ * is thrown away immediately -- we already have the screen from the picker the
+ * user chose in our own UI, and decoding it twice would be pure waste.
+ *
+ * macOS has no equivalent, so it goes through whatever virtual audio device is
+ * installed. `pattern` comes from the main process rather than being hardcoded
+ * here, so adding support for another device is a one-line change over there.
+ */
+async function systemAudioStream(pattern: string): Promise<MediaStream> {
+  if (navigator.userAgent.includes('Windows')) {
+    const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+    display.getVideoTracks().forEach((t) => {
+      display.removeTrack(t)
+      t.stop()
+    })
+    if (display.getAudioTracks().length === 0) {
+      throw new Error('Windows returned no computer audio for that source.')
+    }
+    return display
+  }
+
+  const re = new RegExp(pattern, 'i')
+  const devices = await navigator.mediaDevices.enumerateDevices()
+  const device = devices.find((d) => d.kind === 'audioinput' && re.test(d.label))
+  if (!device) {
+    throw new Error(
+      'No virtual audio device found. Install one from Settings, then send the audio you ' +
+        'want to record into it.'
+    )
+  }
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: { exact: device.deviceId },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    }
+  })
 }
 
 export interface RecorderState {
@@ -129,6 +177,7 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
   const pausedAt = useRef(0)
   const quietSince = useRef<number | null>(null)
   const recordingIdRef = useRef<string | null>(null)
+  const attaching = useRef<string | null>(null)
 
   const teardown = useCallback(() => {
     for (const rig of rigs.current) {
@@ -175,9 +224,9 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
   }, [])
 
   const beginTracks = useCallback(
-    async (recordingId: string, opts: StartOptions, streams: Partial<Record<TrackKind, MediaStream>>) => {
+    async (recordingId: string, opts: StartOptions, streams: Partial<Record<LaneKind, MediaStream>>) => {
       const made: TrackRig[] = []
-      for (const [kind, stream] of Object.entries(streams) as Array<[TrackKind, MediaStream]>) {
+      for (const [kind, stream] of Object.entries(streams) as Array<[LaneKind, MediaStream]>) {
         const isVideo = stream.getVideoTracks().length > 0
         const recorder = new MediaRecorder(stream, {
           mimeType: pickMime(isVideo),
@@ -217,7 +266,7 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
   const start = useCallback(
     async (opts: StartOptions) => {
       setState((s) => ({ ...s, phase: 'arming', error: null, elapsedMs: 0 }))
-      const streams: Partial<Record<TrackKind, MediaStream>> = {}
+      const streams: Partial<Record<LaneKind, MediaStream>> = {}
       try {
         if (opts.sourceId) streams.screen = await screenStream(opts.sourceId)
         if (opts.mic) {
@@ -240,7 +289,13 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
             }
           })
         }
-        if (!streams.screen && !streams.webcam) {
+        if (opts.system) {
+          const status = await soft(api.audio.loopback(), null)
+          streams.system = await systemAudioStream(
+            status?.devicePattern ?? 'blackhole|loopback|virtual audio'
+          )
+        }
+        if (!streams.screen && !streams.webcam && !streams.system) {
           throw new Error('Pick a screen, a window, or your webcam before recording.')
         }
 
@@ -254,13 +309,19 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
           meter()
         }
 
-        const { recordingId } = await must(
-          api.recording.start({
-            title: opts.title,
-            projectId: opts.projectId,
-            kinds: Object.keys(streams) as TrackKind[]
-          })
-        )
+        const kinds = Object.keys(streams) as LaneKind[]
+        attaching.current = opts.attachTo ?? null
+        const recordingId = opts.attachTo
+          ? (await must(api.recording.addSource(opts.attachTo, kinds)), opts.attachTo)
+          : (
+              await must(
+                api.recording.start({
+                  title: opts.title,
+                  projectId: opts.projectId,
+                  kinds
+                })
+              )
+            ).recordingId
         recordingIdRef.current = recordingId
 
         setState((s) => ({
@@ -335,7 +396,8 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
     teardown()
 
     try {
-      await must(api.recording.finalize(id))
+      await must(attaching.current ? api.recording.finalizeSource(id) : api.recording.finalize(id))
+      attaching.current = null
       recordingIdRef.current = null
       setState({
         phase: 'idle',
@@ -371,8 +433,10 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
       }
     })
     teardown()
+    const wasAttaching = attaching.current
     recordingIdRef.current = null
-    if (id) await api.recording.cancel(id)
+    attaching.current = null
+    if (id) await (wasAttaching ? api.recording.cancelSource(id) : api.recording.cancel(id))
     setState({
       phase: 'idle',
       recordingId: null,

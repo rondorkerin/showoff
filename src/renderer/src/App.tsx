@@ -5,7 +5,7 @@ import { ToastProvider, useToast } from './components/Toasts.tsx'
 import { Bar } from './components/ui.tsx'
 import Studio from './views/Studio.tsx'
 import Library from './views/Library.tsx'
-import RecordingDetail from './views/RecordingDetail.tsx'
+import Editor from './views/Editor.tsx'
 import Settings from './views/Settings.tsx'
 import type { JobEvent } from '../../preload/index.ts'
 import type { AppSettings, Project } from '../../shared/types.ts'
@@ -228,7 +228,7 @@ function Inner(): React.ReactElement {
       <main className="min-w-0 flex-1 overflow-hidden">
         {route.name === 'studio' && <Studio shell={shell} />}
         {route.name === 'library' && <Library shell={shell} />}
-        {route.name === 'recording' && <RecordingDetail shell={shell} id={route.id} />}
+        {route.name === 'recording' && <Editor shell={shell} id={route.id} />}
         {route.name === 'settings' && <Settings shell={shell} />}
       </main>
     </div>

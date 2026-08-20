@@ -2,8 +2,8 @@ import { mkdirSync, statSync, writeFileSync, existsSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { probe, probeWithDecode, runFfmpeg, runFfprobe, type MediaInfo } from './ffmpeg.ts'
 import { buildAss, cuesForWindow, type CaptionCue } from './captions.ts'
-import { PLATFORMS, type PlatformId } from '../../shared/platforms.ts'
 import { FfmpegError } from '../../shared/errors.ts'
+import { isVideoLane, type LaneFrame, type LaneKind } from '../../shared/types.ts'
 import { log } from '../log.ts'
 
 export { probe, probeWithDecode }
@@ -40,39 +40,6 @@ export async function remuxToMp4(input: string, output: string): Promise<MediaIn
   args.push('-movflags', '+faststart', output)
 
   await runFfmpeg(args, { label: 'remux', totalSeconds: info.durationMs / 1000 })
-  return probe(output)
-}
-
-/** Combine a silent screen track with a separate mic track into one master. */
-export async function muxTracks(
-  videoPath: string,
-  audioPath: string | null,
-  output: string
-): Promise<MediaInfo> {
-  mkdirSync(dirname(output), { recursive: true })
-  const args = ['-i', videoPath]
-  if (audioPath) args.push('-i', audioPath)
-
-  args.push('-map', '0:v:0')
-  if (audioPath) args.push('-map', '1:a:0')
-
-  args.push(
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-crf',
-    '20',
-    '-pix_fmt',
-    'yuv420p',
-    '-vf',
-    'scale=trunc(iw/2)*2:trunc(ih/2)*2'
-  )
-  if (audioPath) args.push('-c:a', 'aac', '-b:a', '160k')
-  // The tracks start together but may drift in length; stop at the shorter.
-  args.push('-shortest', '-movflags', '+faststart', output)
-
-  await runFfmpeg(args, { label: 'mux' })
   return probe(output)
 }
 
@@ -176,20 +143,37 @@ async function runFfprobeSilence(
   })
 }
 
-export interface RenderClipOptions {
-  masterPath: string
-  webcamPath: string | null
-  outputPath: string
+/* ------------------------------------------------------------- compositing */
+
+/** One lane, flattened for the renderer: the frame is already resolved for the
+ * target aspect and the gain is already a multiplier. */
+export interface CompositeLane {
+  kind: LaneKind
+  path: string
+  offsetMs: number
+  inMs: number
+  outMs: number | null
+  sourceMs: number | null
+  gain: number
+  ducks: boolean
+  frame: LaneFrame
+}
+
+export interface RenderCompositeOptions {
+  lanes: CompositeLane[]
+  width: number
+  height: number
+  /** The window to render, measured on the project timeline. */
   startMs: number
   endMs: number
-  platform: PlatformId
-  captions: CaptionCue[]
-  burnCaptions: boolean
-  webcamPip: boolean
+  outputPath: string
+  captions?: CaptionCue[]
+  burnCaptions?: boolean
+  label?: string
   onProgress?: (fraction: number) => void
 }
 
-export interface RenderClipResult {
+export interface RenderResult {
   path: string
   width: number
   height: number
@@ -197,88 +181,188 @@ export interface RenderClipResult {
   bytes: number
 }
 
-/**
- * Cuts one clip and fits it to a platform.
- *
- * Fitting uses a blurred, zoomed copy of the same frame as the background
- * rather than black bars. A 16:9 screen recording padded into 9:16 with black
- * bars looks broken; with a blurred backdrop it looks intentional.
- *
- *   [src] --split--> [bg] scale-up + crop + blur + darken --,
- *                    [fg] scale-to-fit --------------------> overlay centred
- *                                                            |
- *                                             webcam PiP -----+--> subtitles --> out
- */
-export async function renderClip(opts: RenderClipOptions): Promise<RenderClipResult> {
-  const spec = PLATFORMS[opts.platform]
-  const { width: W, height: H } = spec
+/** Where a lane lands inside the requested window, or null if it misses it. */
+function placement(
+  lane: CompositeLane,
+  startMs: number,
+  endMs: number
+): { seekSec: number; durSec: number; atSec: number } | null {
+  const length = (lane.outMs ?? lane.sourceMs ?? endMs) - lane.inMs
+  if (length <= 0) return null
+  const laneStart = lane.offsetMs
+  const laneEnd = lane.offsetMs + length
+  const from = Math.max(laneStart, startMs)
+  const to = Math.min(laneEnd, endMs)
+  // Under a couple of frames it contributes nothing but an ffmpeg edge case.
+  if (to - from < 60) return null
+  return {
+    seekSec: (lane.inMs + (from - laneStart)) / 1000,
+    durSec: (to - from) / 1000,
+    atSec: (from - startMs) / 1000
+  }
+}
 
-  const startSec = Math.max(0, opts.startMs / 1000)
-  const durationSec = Math.max(0.5, (opts.endMs - opts.startMs) / 1000)
+const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
+
+/**
+ * Renders any set of lanes into one file.
+ *
+ * This is the only compositor in the app: export, clip render and re-render all
+ * come through here, so what you arranged in the editor is by construction what
+ * comes out of every one of them.
+ *
+ *   color W*H ---> overlay blurred backdrop ---> overlay each video lane in z
+ *                  (from the bottom lane)        order, positioned by its frame
+ *                                                          |
+ *   each audio lane -> atrim -> volume -> adelay -,        +--> subtitles --> out
+ *                                                 +-> duck -> amix ----------^
+ */
+export async function renderComposite(opts: RenderCompositeOptions): Promise<RenderResult> {
+  const W = even(opts.width)
+  const H = even(opts.height)
+  const totalSec = Math.max(0.2, (opts.endMs - opts.startMs) / 1000)
   const outDir = dirname(opts.outputPath)
   mkdirSync(outDir, { recursive: true })
 
+  const args: string[] = []
   const filters: string[] = []
-  const args: string[] = ['-accurate_seek', '-ss', String(startSec), '-t', String(durationSec), '-i', opts.masterPath]
+  const videos: Array<{ lane: CompositeLane; at: { seekSec: number; durSec: number; atSec: number }; input: number }> = []
+  const audios: Array<{ lane: CompositeLane; at: { seekSec: number; durSec: number; atSec: number }; input: number }> = []
 
-  const usePip = opts.webcamPip && Boolean(opts.webcamPath) && existsSync(opts.webcamPath ?? '')
-  if (usePip && opts.webcamPath) {
-    args.push(
-      '-accurate_seek',
-      '-ss',
-      String(startSec),
-      '-t',
-      String(durationSec),
-      '-i',
-      opts.webcamPath
-    )
+  for (const lane of opts.lanes) {
+    if (!existsSync(lane.path)) {
+      log.warn('render', 'lane file is missing, skipping', { path: lane.path })
+      continue
+    }
+    const at = placement(lane, opts.startMs, opts.endMs)
+    if (!at) continue
+    const input = args.filter((a) => a === '-i').length
+    args.push('-accurate_seek', '-ss', String(at.seekSec), '-t', String(at.durSec), '-i', lane.path)
+    const bucket = isVideoLane(lane.kind) ? videos : audios
+    bucket.push({ lane, at, input })
   }
 
-  // The background is blurred beyond recognition anyway, so blur it at a
-  // quarter of the output size and scale back up. gblur is O(area), and this
-  // is the single biggest cost in the whole render.
-  const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
-  const bgW = even(W / 4)
-  const bgH = even(H / 4)
+  if (videos.length === 0 && audios.length === 0) {
+    throw FfmpegError('nothing to render: every lane is empty, muted or outside the range')
+  }
 
-  filters.push('[0:v]split=2[bg][fg]')
-  filters.push(
-    `[bg]scale=${bgW}:${bgH}:force_original_aspect_ratio=increase,crop=${bgW}:${bgH},` +
-      `gblur=sigma=${Math.max(2, Math.round(bgW / 45))},eq=brightness=-0.18:saturation=0.7,` +
-      `scale=${W}:${H}[bgb]`
-  )
-  filters.push(`[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1[fgs]`)
-  filters.push(`[bgb][fgs]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[base]`)
+  /* ----- video ----- */
 
+  filters.push(`color=c=black:s=${W}x${H}:r=30:d=${totalSec},format=yuv420p[base]`)
   let last = 'base'
-  if (usePip) {
-    const pipW = Math.round(W * 0.24)
-    const margin = Math.round(W * 0.03)
-    filters.push(`[1:v]scale=${pipW}:-2,setsar=1[pipraw]`)
-    filters.push(
-      `[${last}][pipraw]overlay=main_w-overlay_w-${margin}:main_h-overlay_h-${margin}[withpip]`
-    )
-    last = 'withpip'
-  }
+  let step = 0
+  const next = (): string => `v${step++}`
 
-  if (opts.burnCaptions && opts.captions.length > 0) {
+  videos.forEach((v, i) => {
+    const src = next()
+    filters.push(`[${v.input}:v]setpts=PTS-STARTPTS+${v.at.atSec}/TB,setsar=1[${src}]`)
+
+    // The bottom lane paints a blurred, darkened copy of itself behind the
+    // whole frame. Black bars around a 16:9 recording in a 9:16 output look
+    // broken; this looks deliberate. Blur at a quarter size and scale back up
+    // -- gblur is O(area) and this is the most expensive filter in the graph.
+    const isBackdrop = i === 0 && v.lane.frame.scale >= 0.999
+    let fg = src
+    if (isBackdrop) {
+      const bgW = even(W / 4)
+      const bgH = even(H / 4)
+      const bg = next()
+      fg = next()
+      const blurred = next()
+      const merged = next()
+      filters.push(`[${src}]split=2[${bg}][${fg}]`)
+      filters.push(
+        `[${bg}]scale=${bgW}:${bgH}:force_original_aspect_ratio=increase,crop=${bgW}:${bgH},` +
+          `gblur=sigma=${Math.max(2, Math.round(bgW / 45))},eq=brightness=-0.18:saturation=0.7,` +
+          `scale=${W}:${H},setsar=1[${blurred}]`
+      )
+      filters.push(
+        `[${last}][${blurred}]overlay=0:0:eof_action=pass:repeatlast=0` +
+          `:enable='between(t,${v.at.atSec},${v.at.atSec + v.at.durSec})'[${merged}]`
+      )
+      last = merged
+    }
+
+    const boxW = even(W * v.lane.frame.scale)
+    const boxH = even(H * v.lane.frame.scale)
+    const scaled = next()
+    filters.push(
+      `[${fg}]scale=${boxW}:${boxH}:force_original_aspect_ratio=decrease,setsar=1[${scaled}]`
+    )
+    const onto = next()
+    filters.push(
+      `[${last}][${scaled}]overlay=x='${Math.round(v.lane.frame.x * W)}-overlay_w/2'` +
+        `:y='${Math.round(v.lane.frame.y * H)}-overlay_h/2':eof_action=pass:repeatlast=0` +
+        `:enable='between(t,${v.at.atSec},${v.at.atSec + v.at.durSec})'[${onto}]`
+    )
+    last = onto
+  })
+
+  if (opts.burnCaptions && opts.captions && opts.captions.length > 0) {
     const assName = `${basename(opts.outputPath, '.mp4')}.ass`
-    const assPath = join(outDir, assName)
     writeFileSync(
-      assPath,
+      join(outDir, assName),
       buildAss(opts.captions, { width: W, height: H, vertical: H > W }),
       'utf8'
     )
     // Running with cwd=outDir lets us pass a bare filename, which sidesteps the
     // Windows drive-letter colon that the subtitles filter cannot escape.
-    filters.push(`[${last}]subtitles=${assName}[vout]`)
-    last = 'vout'
+    const burnt = next()
+    filters.push(`[${last}]subtitles=${assName}[${burnt}]`)
+    last = burnt
+  }
+
+  /* ----- audio ----- */
+
+  let audioOut: string | null = null
+  if (audios.length > 0) {
+    let astep = 0
+    const anext = (): string => `a${astep++}`
+    const ducking: string[] = []
+    const plain: string[] = []
+
+    for (const a of audios) {
+      const label = anext()
+      const chain = [`asetpts=PTS-STARTPTS`, `volume=${a.lane.gain.toFixed(3)}`]
+      if (a.at.atSec > 0.001) chain.push(`adelay=${Math.round(a.at.atSec * 1000)}:all=1`)
+      filters.push(`[${a.input}:a]${chain.join(',')}[${label}]`)
+      ;(a.lane.ducks ? ducking : plain).push(label)
+    }
+
+    const mix = (labels: string[], out: string): void => {
+      if (labels.length === 1) filters.push(`[${labels[0]}]anull[${out}]`)
+      else filters.push(`[${labels.join('][')}]amix=inputs=${labels.length}:normalize=0[${out}]`)
+    }
+
+    if (ducking.length > 0 && plain.length > 0) {
+      // A voice-over that fights the original narration is unusable, so the
+      // lane marked ducks pushes everything else down while it has speech --
+      // and only while it has speech, which is what a manual gain cannot do.
+      const duck = anext()
+      const rest = anext()
+      mix(ducking, duck)
+      mix(plain, rest)
+      const key = anext()
+      const keep = anext()
+      filters.push(`[${duck}]asplit=2[${key}][${keep}]`)
+      const ducked = anext()
+      filters.push(
+        `[${rest}][${key}]sidechaincompress=threshold=0.03:ratio=9:attack=25:release=350[${ducked}]`
+      )
+      audioOut = anext()
+      filters.push(`[${ducked}][${keep}]amix=inputs=2:normalize=0:duration=longest[${audioOut}]`)
+    } else {
+      audioOut = anext()
+      mix([...ducking, ...plain], audioOut)
+    }
   }
 
   args.push('-filter_complex', filters.join(';'))
   args.push('-map', `[${last}]`)
-  args.push('-map', '0:a?')
+  if (audioOut) args.push('-map', `[${audioOut}]`)
   args.push(
+    '-t',
+    String(totalSec),
     '-c:v',
     'libx264',
     '-preset',
@@ -293,32 +377,25 @@ export async function renderClip(opts: RenderClipOptions): Promise<RenderClipRes
     '4.1',
     '-r',
     '30',
-    '-c:a',
-    'aac',
-    '-b:a',
-    '160k',
-    '-ar',
-    '48000',
-    '-ac',
-    '2',
     '-movflags',
-    '+faststart',
-    opts.outputPath
+    '+faststart'
   )
+  if (audioOut) args.push('-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2')
+  else args.push('-an')
+  args.push(opts.outputPath)
 
   await runFfmpegInDir(args, outDir, {
-    label: `clip:${opts.platform}`,
-    totalSeconds: durationSec,
+    label: opts.label ?? 'composite',
+    totalSeconds: totalSec,
     onProgress: opts.onProgress
   })
 
   const info = await probe(opts.outputPath)
   const bytes = statSync(opts.outputPath).size
-  if (bytes === 0) {
-    throw FfmpegError(`render produced a zero-byte file at ${opts.outputPath}`)
-  }
-  log.info('render', 'clip rendered', {
-    platform: opts.platform,
+  if (bytes === 0) throw FfmpegError(`render produced a zero-byte file at ${opts.outputPath}`)
+  log.info('render', 'composed', {
+    label: opts.label,
+    lanes: videos.length + audios.length,
     bytes,
     durationMs: info.durationMs
   })
@@ -327,10 +404,11 @@ export async function renderClip(opts: RenderClipOptions): Promise<RenderClipRes
     path: opts.outputPath,
     width: info.width || W,
     height: info.height || H,
-    durationMs: info.durationMs || Math.round(durationSec * 1000),
+    durationMs: info.durationMs || Math.round(totalSec * 1000),
     bytes
   }
 }
+
 
 /** runFfmpeg, but with a working directory (needed for the subtitles filter). */
 async function runFfmpegInDir(

@@ -4,7 +4,16 @@ import { join } from 'node:path'
 import * as repo from '../db/repo.ts'
 import { complete } from '../llm/index.ts'
 import { transcribe, type SttConfig } from '../transcribe/index.ts'
-import { extractAudioWav, posterFrame, renderClip, cuesForWindow, probe } from '../media/render.ts'
+import {
+  extractAudioWav,
+  posterFrame,
+  renderComposite,
+  cuesForWindow,
+  probe,
+  type CompositeLane
+} from '../media/render.ts'
+import { aspectForSize, narrationLane, reconcileLanes, toComposite } from '../lanes.ts'
+import { PLATFORMS } from '../../shared/platforms.ts'
 import { getSettings, resolveKey } from '../settings.ts'
 import { embedTexts } from './embed.ts'
 import {
@@ -21,6 +30,26 @@ import type { PlatformId } from '../../shared/platforms.ts'
 import { log } from '../log.ts'
 
 export type ProgressFn = (stage: string, fraction: number) => void
+
+/**
+ * A clip is the same composite as an export, cropped to the platform's frame.
+ * Clips deliberately go through the one compositor: what you arranged in the
+ * editor is what a clip shows, without a second set of layout rules to keep in
+ * step with the first.
+ */
+function forPlatform(
+  lanes: Awaited<ReturnType<typeof reconcileLanes>>,
+  platform: PlatformId,
+  webcamPip: boolean
+): { lanes: CompositeLane[]; width: number; height: number } {
+  const spec = PLATFORMS[platform]
+  const kept = webcamPip ? lanes : lanes.filter((l) => !(l.kind === 'webcam' && l.z > 0))
+  return {
+    lanes: toComposite(kept, aspectForSize(spec.width, spec.height)),
+    width: spec.width,
+    height: spec.height
+  }
+}
 
 function sttConfig(s: AppSettings, onProgress?: (f: number, note: string) => void): SttConfig {
   return {
@@ -67,10 +96,10 @@ export async function runTranscription(
   const rec = await repo.getRecording(recordingId)
   if (!rec) throw NotFoundError('Recording')
 
-  const master = await repo.getTrack(recordingId, 'screen')
-  const voiceover = await repo.getTrack(recordingId, 'voiceover')
-  // A voice-over pass replaces the original narration as the thing to transcribe.
-  const source = voiceover?.path ?? master?.path
+  // A voice-over replaces the original narration as the thing to transcribe;
+  // failing that it is the mic, and only failing that the video's own audio.
+  const lanes = await reconcileLanes(recordingId)
+  const source = narrationLane(lanes)?.path
   if (!source || !existsSync(source)) throw NotFoundError('Recording media')
 
   onProgress('Extracting audio', 0.05)
@@ -227,10 +256,10 @@ async function renderAll(
   const rec = await repo.getRecording(recordingId)
   if (!rec) throw NotFoundError('Recording')
 
-  const screen = await repo.getTrack(recordingId, 'screen')
-  const webcam = await repo.getTrack(recordingId, 'webcam')
+  const lanes = await reconcileLanes(recordingId)
+  const webcam = lanes.find((l) => l.kind === 'webcam') ?? null
   const transcript = await repo.getTranscript(recordingId)
-  if (!screen) throw NotFoundError('Screen track')
+  if (lanes.length === 0) throw NotFoundError('Recording media')
 
   const clipsDir = join(rec.dir, 'clips')
   mkdirSync(clipsDir, { recursive: true })
@@ -260,16 +289,14 @@ async function renderAll(
     // One clip failing must not lose the other clips or the whole cut. Record
     // the failure and keep going.
     try {
-      const res = await renderClip({
-        masterPath: screen.path,
-        webcamPath: webcam?.path ?? null,
+      const res = await renderComposite({
+        ...forPlatform(lanes, p.platform, s.webcamPip),
         outputPath: outPath,
         startMs: p.startMs,
         endMs: p.endMs,
-        platform: p.platform,
         captions: cues,
         burnCaptions: s.burnCaptions,
-        webcamPip: s.webcamPip,
+        label: `clip:${p.platform}`,
         onProgress: (f) => onProgress(`Rendering clip ${i + 1} of ${planned.length}`, base + f * span)
       })
 
@@ -320,9 +347,9 @@ export async function reRenderClip(clipId: string, onProgress: ProgressFn): Prom
   if (!clip) throw NotFoundError('Clip')
   const rec = await repo.getRecording(clip.recording_id)
   if (!rec) throw NotFoundError('Recording')
-  const screen = await repo.getTrack(clip.recording_id, 'screen')
-  const webcam = await repo.getTrack(clip.recording_id, 'webcam')
-  if (!screen) throw NotFoundError('Screen track')
+  const lanes = await reconcileLanes(clip.recording_id)
+  const webcam = lanes.find((l) => l.kind === 'webcam') ?? null
+  if (lanes.length === 0) throw NotFoundError('Recording media')
   const transcript = await repo.getTranscript(clip.recording_id)
 
   const cues = transcript
@@ -342,16 +369,14 @@ export async function reRenderClip(clipId: string, onProgress: ProgressFn): Prom
   const outPath = join(clipsDir, `${slugify(clip.title) || 'clip'}-${clip.platform}-${clip.rank + 1}.mp4`)
 
   onProgress('Re-rendering', 0.1)
-  const res = await renderClip({
-    masterPath: screen.path,
-    webcamPath: webcam?.path ?? null,
+  const res = await renderComposite({
+    ...forPlatform(lanes, clip.platform, s.webcamPip),
     outputPath: outPath,
     startMs: clip.start_ms,
     endMs: clip.end_ms,
-    platform: clip.platform,
     captions: cues,
     burnCaptions: s.burnCaptions,
-    webcamPip: s.webcamPip,
+    label: `clip:${clip.platform}`,
     onProgress: (f) => onProgress('Re-rendering', 0.1 + f * 0.85)
   })
 

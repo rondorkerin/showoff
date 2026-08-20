@@ -6,6 +6,7 @@ import { Badge, Button, Card, Empty, Field, Input, Select, Spinner } from '../co
 import { useToast } from '../components/Toasts.tsx'
 import type { Shell } from '../App.tsx'
 import type { CaptureSource } from '../../../preload/index.ts'
+import type { LoopbackStatus } from '../../../shared/types.ts'
 
 function Meter({ level }: { level: number }): React.ReactElement {
   const bars = 14
@@ -45,6 +46,8 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
   const [projectId, setProjectId] = useState<string | null>(null)
   const [mic, setMic] = useState(true)
   const [webcam, setWebcam] = useState(false)
+  const [system, setSystem] = useState(false)
+  const [loopback, setLoopback] = useState<LoopbackStatus | null>(null)
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([])
   const [camDevices, setCamDevices] = useState<MediaDeviceInfo[]>([])
   const [micDeviceId, setMicDeviceId] = useState<string>('')
@@ -70,6 +73,7 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
   const loadSources = useCallback(async () => {
     setLoadingSources(true)
     setPerms(await soft(api.permissions.status(), null))
+    setLoopback(await soft(api.audio.loopback(), null))
     try {
       const list = await must(api.sources.list())
       setSources(list)
@@ -146,6 +150,7 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
       sourceId,
       mic,
       webcam,
+      system,
       micDeviceId: micDeviceId || undefined,
       webcamDeviceId: camDeviceId || undefined,
       countdownSeconds: countdown
@@ -384,6 +389,35 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
               className="mt-2"
             />
 
+            <TrackRow
+              on={system}
+              onToggle={setSystem}
+              label="Computer audio"
+              devices={[]}
+              deviceId=""
+              onDevice={() => undefined}
+              disabled={!loopback?.available}
+              className="mt-2"
+            />
+            {loopback && !loopback.available && (
+              <p className="mt-1.5 pl-[40px] text-[11px] leading-relaxed text-[#6b727d]">
+                {loopback.detail}{' '}
+                {loopback.installable ? (
+                  <button
+                    onClick={async () => {
+                      const job = await soft(api.audio.installLoopback(), null)
+                      if (job) toast.push({ tone: 'info', title: 'Installing BlackHole' })
+                    }}
+                    className="text-[#F5A524] underline underline-offset-2"
+                  >
+                    Install it
+                  </button>
+                ) : (
+                  loopback.remedy
+                )}
+              </p>
+            )}
+
             <div className="mt-4">
               <Field label="Countdown">
                 <Select value={countdown} onChange={(e) => setCountdown(Number(e.target.value))}>
@@ -421,8 +455,8 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
             </button>
           ) : (
             <div className="text-[11.5px] leading-relaxed text-[#6b727d]">
-              Screen, microphone and webcam are recorded as separate tracks, so the cut can move
-              your face around without re-encoding your screen.
+              Every source becomes its own lane, so afterwards you can move your face around,
+              change the levels or drop a track entirely without re-recording anything.
             </div>
           )}
         </div>
@@ -486,6 +520,7 @@ function TrackRow({
   devices,
   deviceId,
   onDevice,
+  disabled,
   className
 }: {
   on: boolean
@@ -494,13 +529,20 @@ function TrackRow({
   devices: MediaDeviceInfo[]
   deviceId: string
   onDevice: (v: string) => void
+  disabled?: boolean
   className?: string
 }): React.ReactElement {
   return (
     <div className={className}>
       <button
         onClick={() => onToggle(!on)}
-        className="flex w-full items-center gap-2.5 rounded-[8px] px-1 py-1.5 text-left hover:bg-[#171a1f]"
+        role="switch"
+        aria-checked={on}
+        disabled={disabled}
+        className={cls(
+          'flex w-full items-center gap-2.5 rounded-[8px] px-1 py-1.5 text-left',
+          disabled ? 'cursor-not-allowed opacity-45' : 'hover:bg-[#171a1f]'
+        )}
       >
         <span
           className={cls(

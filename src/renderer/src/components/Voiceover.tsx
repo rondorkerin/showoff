@@ -7,20 +7,22 @@ import { useToast } from './Toasts.tsx'
 type Phase = 'idle' | 'arming' | 'recording' | 'saving'
 
 /**
- * A second pass over footage you have already captured: the video plays back
- * muted while you narrate it. The voice-over becomes the track Showoff
- * transcribes, so the clips are cut from what you meant to say rather than
- * whatever you mumbled the first time through.
+ * A second pass over footage you have already captured: the project plays
+ * back from the top while you narrate it. The result is a lane like any other
+ * -- you can play it, level it, move it in time, duck the original under it,
+ * or delete it -- rather than a hidden track that quietly replaces what you
+ * recorded and can only be undone by re-transcribing.
  */
 export default function Voiceover({
   recordingId,
   hasVoiceover,
-  videoRef,
+  playback,
   onSaved
 }: {
   recordingId: string
   hasVoiceover: boolean
-  videoRef: React.RefObject<HTMLVideoElement | null>
+  /** Drives the editor's own transport, so you narrate to picture. */
+  playback: { start: () => void; stop: () => void }
   onSaved: () => void
 }): React.ReactElement {
   const toast = useToast()
@@ -93,13 +95,9 @@ export default function Voiceover({
       r.start(2000)
       recorder.current = r
 
-      // Play the footage back from the top, muted, so you are narrating to
-      // picture rather than to a static frame.
-      if (videoRef.current) {
-        videoRef.current.currentTime = 0
-        videoRef.current.muted = true
-        void videoRef.current.play()
-      }
+      // Play the project back from the top so you are narrating to picture
+      // rather than to a static frame.
+      playback.start()
 
       const t0 = Date.now()
       timer.current = setInterval(() => setElapsed(Date.now() - t0), 250)
@@ -113,8 +111,7 @@ export default function Voiceover({
 
   const stop = async (discard: boolean): Promise<void> => {
     setPhase('saving')
-    videoRef.current?.pause()
-    if (videoRef.current) videoRef.current.muted = false
+    playback.stop()
 
     const r = recorder.current
     if (r && r.state !== 'inactive') {

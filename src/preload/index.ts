@@ -9,9 +9,12 @@ import type {
   Note,
   Project,
   Recording,
-  Track,
+  Lane,
+  LanePatch,
+  LoopbackStatus,
+  Aspect,
   TranscriptSegment,
-  TrackKind
+  LaneKind
 } from '../shared/types.ts'
 import type { PlatformId, PlatformSpec } from '../shared/platforms.ts'
 
@@ -49,7 +52,7 @@ export interface CaptureSource {
 
 export interface RecordingDetail {
   recording: Recording
-  tracks: Track[]
+  lanes: Lane[]
   transcript: { id: string; provider: string; text: string; segments: TranscriptSegment[] } | null
   clips: Clip[]
   renders: ClipRender[]
@@ -90,14 +93,35 @@ const api = {
     ask: (kind: 'microphone' | 'camera' | 'screen') => call<boolean>('permissions:ask', kind)
   },
   recording: {
-    start: (input: { title: string; projectId: string | null; kinds: TrackKind[] }) =>
+    start: (input: { title: string; projectId: string | null; kinds: LaneKind[] }) =>
       call<{ recordingId: string; dir: string }>('recording:start', input),
     // Fire-and-forget so a 2s chunk never blocks the recorder on a round trip.
-    chunk: (recordingId: string, kind: TrackKind, chunk: ArrayBuffer) =>
+    chunk: (recordingId: string, kind: LaneKind, chunk: ArrayBuffer) =>
       ipcRenderer.send('recording:chunk', { recordingId, kind, chunk }),
     finalize: (recordingId: string) => call<JobEvent>('recording:finalize', recordingId),
     cancel: (recordingId: string) => call<void>('recording:cancel', recordingId),
-    orphans: () => call<Array<{ dir: string; path: string; bytes: number }>>('recording:orphans')
+    orphans: () => call<Array<{ dir: string; path: string; bytes: number }>>('recording:orphans'),
+    // Recording another source into a project that already exists.
+    addSource: (recordingId: string, kinds: LaneKind[]) =>
+      call<{ dir: string }>('source:start', { recordingId, kinds }),
+    finalizeSource: (recordingId: string) => call<JobEvent>('source:finalize', recordingId),
+    cancelSource: (recordingId: string) => call<void>('source:cancel', recordingId)
+  },
+  audio: {
+    loopback: () => call<LoopbackStatus>('audio:loopback'),
+    installLoopback: () => call<JobEvent>('audio:installLoopback')
+  },
+  lanes: {
+    list: (recordingId: string) => call<Lane[]>('lanes:list', recordingId),
+    update: (id: string, patch: LanePatch) => call<Lane | null>('lanes:update', { id, patch }),
+    remove: (id: string) => call<void>('lanes:delete', id),
+    aspect: (recordingId: string, aspect: Aspect) =>
+      call<void>('lanes:aspect', { recordingId, aspect })
+  },
+  exports: {
+    // Resolves to null when the user dismisses the save dialog.
+    mp4: (recordingId: string, aspect?: Aspect, subtitles?: boolean) =>
+      call<JobEvent | null>('export:mp4', { recordingId, aspect, subtitles })
   },
   voiceover: {
     start: (recordingId: string) => call<{ dir: string }>('voiceover:start', recordingId),

@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+
+/*
+ * Dark by default and on purpose: you are recording your screen, and a bright
+ * app blows out your own footage. One accent, amber, reserved for the record
+ * state and primary actions so "recording" is never ambiguous.
+ */
+@theme {
+  --color-ground: #0b0c0e;
+  --color-surface: #121418;
+  --color-surface-2: #191c21;
+  --color-line: #262a31;
+  --color-line-soft: #1d2026;
+  --color-ink: #e9eaec;
+  --color-ink-dim: #9aa1ab;
+  --color-ink-faint: #6b727d;
+  --color-accent: #f5a524;
+  --color-accent-dim: #7a5211;
+  --color-danger: #f0616d;
+  --color-good: #4ade80;
+  --radius-card: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family:
+    Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2f37;
+  border-radius: 6px;
+  border: 2px solid var(--color-ground);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The window itself signals recording. Impossible to miss, impossible to fake. */
+.recording-chrome::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  border: 2px solid var(--color-accent);
+  pointer-events: none;
+  z-index: 100;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.rec-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+textarea,
+input,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}

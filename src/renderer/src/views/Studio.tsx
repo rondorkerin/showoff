@@ -50,6 +50,9 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
   const [camDeviceId, setCamDeviceId] = useState<string>('')
   const [countdown, setCountdown] = useState(3)
   const [hidden, setHidden] = useState(false)
+  const [perms, setPerms] = useState<{ screen: string; microphone: string; camera: string } | null>(
+    null
+  )
 
   const onFinalized = useCallback(
     (id: string) => {
@@ -65,6 +68,7 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
 
   const loadSources = useCallback(async () => {
     setLoadingSources(true)
+    setPerms(await soft(api.permissions.status(), null))
     try {
       const list = await must(api.sources.list())
       setSources(list)
@@ -257,9 +261,24 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
             </div>
           ) : sources.length === 0 ? (
             <Empty
-              title="No screens available"
-              body="macOS needs Screen Recording permission for Showoff before it can list your displays. Grant it in System Settings → Privacy & Security → Screen Recording, then reopen Showoff."
-              action={<Button onClick={() => void loadSources()}>Try again</Button>}
+              title={
+                perms && perms.screen !== 'granted'
+                  ? 'Showoff needs permission to see your screen'
+                  : 'No screens available'
+              }
+              body={
+                perms && perms.screen !== 'granted'
+                  ? 'macOS keeps screen capture behind a system permission, and it will not prompt again once it has been answered. Turn Showoff on under Screen & System Audio Recording, then quit and reopen Showoff — macOS only picks the change up on a fresh launch.'
+                  : 'No displays or windows came back. This is usually a permission that was granted to a different copy of the app.'
+              }
+              action={
+                <div className="flex gap-2">
+                  <Button variant="primary" onClick={() => void api.permissions.open('screen')}>
+                    Open System Settings
+                  </Button>
+                  <Button onClick={() => void loadSources()}>Try again</Button>
+                </div>
+              }
             />
           ) : (
             <>
@@ -313,7 +332,10 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
 
             <TrackRow
               on={mic}
-              onToggle={setMic}
+              onToggle={(v) => {
+                setMic(v)
+                if (v) void api.permissions.ask('microphone')
+              }}
               label="Microphone"
               devices={micDevices}
               deviceId={micDeviceId}
@@ -321,7 +343,10 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
             />
             <TrackRow
               on={webcam}
-              onToggle={setWebcam}
+              onToggle={(v) => {
+                setWebcam(v)
+                if (v) void api.permissions.ask('camera')
+              }}
               label="Webcam"
               devices={camDevices}
               deviceId={camDeviceId}
@@ -350,10 +375,26 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
             Start recording
           </Button>
 
-          <div className="text-[11.5px] leading-relaxed text-[#6b727d]">
-            Screen, microphone and webcam are recorded as separate tracks, so the cut can move
-            your face around without re-encoding your screen.
-          </div>
+          {perms && ((mic && perms.microphone === 'denied') || (webcam && perms.camera === 'denied')) ? (
+            <button
+              onClick={() =>
+                void api.permissions.open(
+                  mic && perms.microphone === 'denied' ? 'microphone' : 'camera'
+                )
+              }
+              className="rounded-[10px] border border-[#F5A524]/35 bg-[#F5A524]/8 px-3 py-2 text-left text-[11.5px] leading-relaxed text-[#F5A524]"
+            >
+              {mic && perms.microphone === 'denied'
+                ? 'Microphone access is denied, so this recording would be silent.'
+                : 'Camera access is denied, so the webcam track would be empty.'}{' '}
+              Open System Settings →
+            </button>
+          ) : (
+            <div className="text-[11.5px] leading-relaxed text-[#6b727d]">
+              Screen, microphone and webcam are recorded as separate tracks, so the cut can move
+              your face around without re-encoding your screen.
+            </div>
+          )}
         </div>
       </div>
     </div>

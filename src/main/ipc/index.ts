@@ -1,4 +1,12 @@
-import { BrowserWindow, desktopCapturer, dialog, ipcMain, shell, app } from 'electron'
+import {
+  BrowserWindow,
+  desktopCapturer,
+  dialog,
+  ipcMain,
+  shell,
+  app,
+  systemPreferences
+} from 'electron'
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import * as repo from '../db/repo.ts'
@@ -51,6 +59,38 @@ export function registerIpc(): void {
       kind: s.id.startsWith('screen') ? 'screen' : 'window',
       thumbnail: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL()
     }))
+  })
+
+  /**
+   * macOS gates screen capture behind TCC and gives no prompt of its own once
+   * it has been denied — the source list simply comes back empty forever. Say
+   * which permission is missing and open the exact settings pane.
+   */
+  handle('permissions:status', () => {
+    if (process.platform !== 'darwin') {
+      return { screen: 'granted', microphone: 'granted', camera: 'granted' }
+    }
+    return {
+      screen: systemPreferences.getMediaAccessStatus('screen'),
+      microphone: systemPreferences.getMediaAccessStatus('microphone'),
+      camera: systemPreferences.getMediaAccessStatus('camera')
+    }
+  })
+
+  handle('permissions:open', async (kind: 'screen' | 'microphone' | 'camera') => {
+    if (process.platform !== 'darwin') return false
+    const pane = {
+      screen: 'Privacy_ScreenCapture',
+      microphone: 'Privacy_Microphone',
+      camera: 'Privacy_Camera'
+    }[kind]
+    await shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+    return true
+  })
+
+  handle('permissions:ask', async (kind: 'microphone' | 'camera') => {
+    if (process.platform !== 'darwin') return true
+    return await systemPreferences.askForMediaAccess(kind)
   })
 
   handle('recording:start', (input: { title: string; projectId: string | null; kinds: TrackKind[] }) =>

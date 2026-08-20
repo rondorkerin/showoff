@@ -301,7 +301,7 @@ P1 blocks ship; P2 lands the same branch; P3 is a follow-up.
   - Files: `src/renderer/src/views/RecordingDetail.tsx`
   - Verify: with no API key and no whisper installed, record → export succeeds end to end
 
-- [ ] **T9 (P3, human: ~3h / CC: ~15min)** — docs — Rewrite the reversed principle
+- [x] **T9 (P3, human: ~3h / CC: ~15min)** — docs — Rewrite the reversed principle
   - Surfaced by: Finding 7
   - Files: `docs/DESIGN.md`, `TODOS.md`, `README.md`
   - Verify: DESIGN.md no longer forbids what the app does

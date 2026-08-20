@@ -2,11 +2,17 @@
 
 **A desktop studio for builders who want to ship one screen share a day.**
 
-Record your screen, your voice and your webcam. Showoff transcribes it locally,
-asks you a few clarifying questions, and cuts the recording into
-platform-shaped clips — X, LinkedIn, YouTube Shorts, YouTube — each with a
-caption you can edit and copy. Everything is stored in an embedded Postgres
-knowledgebase you can search by meaning, not just keywords.
+Record your screen, webcam, microphone and computer audio at once, then edit
+what you captured: move the webcam where you want it, level or mute any track,
+trim the ends, narrate over it, reframe for vertical, and export an mp4.
+
+Every source is its own lane. Nothing is baked together at record time, so
+there is no take you cannot take apart afterwards. Add another screen or
+another camera to the same project later and it arrives as one more lane.
+
+Transcribing, chopping into platform-shaped clips, burning in subtitles and
+generating a post are all still here — but they are optional passes over a
+recording you have already edited, not the pipeline you have to go through.
 
 ![Clips cut from one recording](docs/screenshot-clips.png)
 
@@ -49,7 +55,8 @@ Click **More info** → **Run anyway**.
 The first recording triggers two system prompts. Showoff cannot capture
 anything until you grant them:
 
-- **Screen & System Audio Recording** — for the screen or window you pick
+- **Screen & System Audio Recording** — for the screen or window you pick, and
+  for computer audio, which goes through the same permission
 - **Microphone** — for your voice
 - **Camera** — only if you switch the webcam track on
 
@@ -61,12 +68,37 @@ Showoff (macOS requires a restart of the app for this permission to take).
 
 ## What it does
 
-**Record.** Screen, microphone and webcam are captured as three separate
-tracks, streamed to disk in two-second chunks. A crash mid-recording leaves a
-playable file behind rather than a corrupt one. There is a countdown, a live
+**Record.** Screen, webcam, microphone and computer audio are captured as
+separate files, streamed to disk as they arrive. A crash mid-recording leaves
+playable files behind rather than a corrupt one. There is a countdown, a live
 level meter, and a hint if your microphone has gone quiet for too long.
 
-**Transcribe.** `whisper.cpp` runs on your machine, and nothing leaves your
+Computer audio — what the machine is playing — needs nothing installed on
+either platform. Windows uses Electron's loopback capture. macOS 13 and newer
+goes through ScreenCaptureKit, the same API OBS moved to in version 29, via a
+small bundled helper; it rides on the screen-recording permission you have
+already granted. On macOS 12, or if you would rather route audio yourself,
+Showoff falls back to a virtual audio device and can `brew install
+blackhole-2ch` for you.
+
+**Edit.** The editor is a timeline of lanes, one per source, over a live
+preview that composites exactly what the exporter will render.
+
+- Drag a lane on the canvas to move it, or resize it with the Size slider.
+  Position is remembered **per aspect ratio**, so framing for 9:16 leaves your
+  16:9 layout alone.
+- Drag a lane in the rail to slide it in time; drag its edges to trim. Arrow
+  keys nudge, shift makes it a second.
+- Every lane has a level, a mute, and a stacking order. Audio lanes can duck
+  the others under them.
+- Record a **voice-over** against the footage. It becomes a lane like any
+  other — play it, level it, move it, duck the original under it, or delete it.
+  No re-transcribe required.
+- **Add source** records another screen, camera or audio track into a project
+  that already exists.
+- Choose an output shape — source, 16:9, 9:16, 1:1, 4:5 — and **Export mp4**.
+
+**Transcribe.** *(Optional.)* `whisper.cpp` runs on your machine, and nothing leaves your
 computer unless you explicitly point Showoff at Groq or OpenAI in Settings.
 The ~140MB English model downloads once, on first use.
 
@@ -82,18 +114,18 @@ If you would rather not install anything, put a Groq or OpenAI API key in
 Settings and transcription happens in the cloud instead. Settings → Models
 always shows which one you are actually using.
 
-**Ask.** Before cutting, Showoff reads the transcript and asks you three or
+**Ask.** *(Optional.)* Before cutting, Showoff reads the transcript and asks you three or
 four questions it genuinely cannot answer on its own — what the product is
 actually called, which of two fixes should lead, who you are posting for.
 Answers go straight into the prompt. Skip any of them.
 
-**Cut.** The model plans clips against real platform constraints (aspect ratio,
+**Cut.** *(Optional.)* The model plans clips against real platform constraints (aspect ratio,
 duration ceiling, character limits) and Showoff renders each one with ffmpeg:
 letterboxed onto a blurred, darkened zoom of your own footage rather than black
 bars, captions burned in from the transcript, webcam picture-in-picture if you
 recorded one.
 
-**Post.** Every clip has an editable description and hashtags, with a live
+**Post.** *(Optional.)* Every clip has an editable description and hashtags, with a live
 character count against the platform's limit. One button copies the exact text
 to paste. **Export bundle** writes the mp4s, poster frames, share text, notes
 and transcript into a folder.

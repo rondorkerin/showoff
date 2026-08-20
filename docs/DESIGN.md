@@ -43,6 +43,12 @@ mic level meter that actually moves, a 3-2-1 countdown, then a minimal recording
 with elapsed time and a stop button. Recording state is unmistakable: amber border on
 the window chrome, amber dot in the title.
 
+Track toggles never lie about what they will do. Computer audio is a plain switch
+wherever it works without setup — Windows loopback, or ScreenCaptureKit on macOS 13+
+— and only becomes a disabled row with an install affordance where a virtual audio
+device is genuinely required. A toggle that flips on and then silently records
+nothing is worse than one that says it cannot.
+
 **Editor.** The default screen for any recording. A preview canvas with an aspect
 chooser above it (16:9 / 9:16 / 1:1 / 4:5) and the webcam as a draggable overlay
 inside it; a lane inspector on the right showing whichever lane is selected; and

@@ -32,7 +32,7 @@ async function screenStream(sourceId: string): Promise<MediaStream> {
   // Electron's desktopCapturer id is handed to getUserMedia through the legacy
   // chromeMediaSource constraints; getDisplayMedia would re-prompt the OS picker
   // and lose the source the user already chose in our own UI.
-  return await navigator.mediaDevices.getUserMedia({
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
       mandatory: {
@@ -44,6 +44,43 @@ async function screenStream(sourceId: string): Promise<MediaStream> {
       }
     }
   } as unknown as MediaStreamConstraints)
+
+  await assertNotTheCamera(stream)
+  return stream
+}
+
+/**
+ * When Chromium cannot satisfy the desktop constraints -- screen recording not
+ * granted, or a source id that has gone stale -- it does not fail. It quietly
+ * hands back the default camera instead, and the recording that comes out looks
+ * completely normal while being a video of your face where your screen should
+ * be. That happened, and nothing caught it until someone watched the file.
+ *
+ * Only rejects on a positive match against a real camera, so an unfamiliar
+ * desktop-capture label can never block a legitimate recording.
+ */
+async function assertNotTheCamera(stream: MediaStream): Promise<void> {
+  const track = stream.getVideoTracks()[0]
+  if (!track) return
+
+  const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string }
+  // Present only on display captures, so it settles the question outright.
+  if (settings.displaySurface) return
+
+  const cameras = await navigator.mediaDevices
+    .enumerateDevices()
+    .then((all) => all.filter((d) => d.kind === 'videoinput'))
+    .catch(() => [])
+
+  const looksLikeACamera = cameras.some((c) => c.label && c.label === track.label)
+  if (!looksLikeACamera) return
+
+  stream.getTracks().forEach((t) => t.stop())
+  throw new Error(
+    `Your camera came back instead of your screen ("${track.label}"). macOS does this when ` +
+      'screen recording has not been granted to Showoff. Allow it under Privacy & Security → ' +
+      'Screen & System Audio Recording, then quit and reopen Showoff.'
+  )
 }
 
 export interface StartOptions {

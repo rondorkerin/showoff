@@ -126,6 +126,10 @@ export async function listTracks(recordingId: string): Promise<Track[]> {
   ])
 }
 
+export async function deleteTrack(recordingId: string, kind: TrackKind): Promise<void> {
+  await query('DELETE FROM tracks WHERE recording_id=$1 AND kind=$2', [recordingId, kind])
+}
+
 export async function getTrack(recordingId: string, kind: TrackKind): Promise<Track | null> {
   return one<Track>('SELECT * FROM tracks WHERE recording_id=$1 AND kind=$2 LIMIT 1', [
     recordingId,

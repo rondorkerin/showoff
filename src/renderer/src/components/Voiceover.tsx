@@ -47,6 +47,16 @@ export default function Voiceover({
 
   useEffect(() => () => teardown(), [teardown])
 
+  const remove = async (): Promise<void> => {
+    const res = await api.voiceover.remove(recordingId)
+    if (res.ok) {
+      toast.ok('Voice-over removed', 'The audio file stays on disk. Re-transcribe to use your original narration.')
+      onSaved()
+    } else {
+      toast.fail('Could not remove the voice-over', res.error)
+    }
+  }
+
   const start = async (): Promise<void> => {
     setPhase('arming')
     try {
@@ -143,6 +153,11 @@ export default function Voiceover({
         <Button size="sm" variant="ghost" onClick={() => void start()}>
           {hasVoiceover ? 'Re-record voice-over' : 'Record voice-over'}
         </Button>
+        {hasVoiceover && (
+          <Button size="sm" variant="ghost" onClick={() => void remove()}>
+            Remove
+          </Button>
+        )}
         <span className="text-[11px] text-[#6b727d]">
           {hasVoiceover
             ? 'A voice-over is attached. Re-transcribe to use it.'

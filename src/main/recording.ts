@@ -278,6 +278,17 @@ export async function cancelVoiceover(recordingId: string): Promise<void> {
   log.info('recording', 'voiceover discarded', { recordingId })
 }
 
+/**
+ * Detaches a saved voice-over. The audio file stays on disk -- same promise as
+ * deleting a recording -- but the track row goes, so transcription falls back
+ * to the original narration. Without this, saving one voice-over is a one-way
+ * door: every later re-transcribe keeps using it and there is no way back.
+ */
+export async function removeVoiceover(recordingId: string): Promise<void> {
+  await repo.deleteTrack(recordingId, 'voiceover')
+  log.info('recording', 'voiceover removed', { recordingId })
+}
+
 async function cleanupFiles(paths: string[]): Promise<void> {
   for (const p of paths) {
     try {

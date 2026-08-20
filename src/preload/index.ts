@@ -102,7 +102,8 @@ const api = {
   voiceover: {
     start: (recordingId: string) => call<{ dir: string }>('voiceover:start', recordingId),
     finalize: (recordingId: string) => call<{ path: string }>('voiceover:finalize', recordingId),
-    cancel: (recordingId: string) => call<void>('voiceover:cancel', recordingId)
+    cancel: (recordingId: string) => call<void>('voiceover:cancel', recordingId),
+    remove: (recordingId: string) => call<void>('voiceover:remove', recordingId)
   },
   projects: {
     list: () => call<Project[]>('projects:list'),

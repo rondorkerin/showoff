@@ -132,7 +132,7 @@ export default function ClipCard({
               className="mono text-[11px] text-[#6b727d]"
               title="How strongly the model rated this moment as a standalone piece of content"
             >
-              hook {Math.round((clip.score ?? 0) * 100)}
+              hook {(clip.score ?? 0).toFixed(1)}/10
             </span>
           </div>
 

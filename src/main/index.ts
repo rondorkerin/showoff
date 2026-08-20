@@ -5,6 +5,7 @@ import { registerIpc } from './ipc/index.ts'
 import { closeDb, getDb } from './db/index.ts'
 import { getSettings } from './settings.ts'
 import { log } from './log.ts'
+import { checkForUpdates } from './updates.ts'
 
 const isDev = !app.isPackaged
 
@@ -137,6 +138,10 @@ app.whenReady().then(async () => {
   }
 
   createWindow()
+
+  // Fire and forget, a few seconds after launch so it never competes with
+  // opening the window.
+  setTimeout(() => void checkForUpdates(), 6000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

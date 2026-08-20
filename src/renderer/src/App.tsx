@@ -108,6 +108,17 @@ function Inner(): React.ReactElement {
   }, [reloadProjects, toast])
 
   useEffect(() => {
+    return api.onUpdate((info) => {
+      toast.push({
+        tone: 'info',
+        title: `Showoff ${info.version} is out`,
+        body: 'Click to open the release page and grab the new build.',
+        detail: info.url
+      })
+    })
+  }, [toast])
+
+  useEffect(() => {
     return api.onJob((event, payload) => {
       setJobs((list) => {
         const rest = list.filter((j) => j.id !== payload.id)

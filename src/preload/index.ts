@@ -159,6 +159,14 @@ const api = {
   /** Turns an absolute file path into a URL the renderer is allowed to load. */
   mediaUrl: (path: string) => `showoff://media/?p=${encodeURIComponent(path)}`,
 
+  onUpdate: (fn: (info: { version: string; url: string; notes: string }) => void) => {
+    const l = (_e: unknown, info: { version: string; url: string; notes: string }): void => fn(info)
+    ipcRenderer.on('update:available', l)
+    return (): void => {
+      ipcRenderer.removeListener('update:available', l)
+    }
+  },
+
   onJob: (fn: (event: string, payload: JobEvent) => void) => {
     const channels = ['job:queued', 'job:update', 'job:done', 'job:failed']
     const listeners = channels.map((c) => {

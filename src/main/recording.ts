@@ -257,6 +257,27 @@ export async function finalizeVoiceover(recordingId: string): Promise<{ path: st
   return { path: m4a }
 }
 
+/**
+ * Throws away an in-progress voice-over and nothing else. Deliberately not
+ * cancelRecording: that deletes the recording row and every file with it,
+ * which would be a catastrophic thing to do to somebody who just decided they
+ * did not like their second take.
+ */
+export async function cancelVoiceover(recordingId: string): Promise<void> {
+  const session = sessions.get(recordingId)
+  if (!session) return
+  const track = session.tracks.get('voiceover')
+  sessions.delete(recordingId)
+  if (!track) return
+  await closeStream(track)
+  try {
+    if (existsSync(track.partPath)) unlinkSync(track.partPath)
+  } catch {
+    // best effort
+  }
+  log.info('recording', 'voiceover discarded', { recordingId })
+}
+
 async function cleanupFiles(paths: string[]): Promise<void> {
   for (const p of paths) {
     try {

@@ -5,6 +5,7 @@ import { Badge, Button, Empty, Input, Select, Spinner } from '../components/ui.t
 import { useToast } from '../components/Toasts.tsx'
 import ClipCard, { ClipSkeleton } from '../components/ClipCard.tsx'
 import CutDialog from '../components/CutDialog.tsx'
+import Voiceover from '../components/Voiceover.tsx'
 import type { Shell } from '../App.tsx'
 import type { RecordingDetail as Detail } from '../../../preload/index.ts'
 import type { PlatformId } from '../../../shared/platforms.ts'
@@ -248,6 +249,13 @@ export default function RecordingDetail({
               Delete
             </Button>
           </div>
+
+          <Voiceover
+            recordingId={id}
+            hasVoiceover={detail.tracks.some((t) => t.kind === 'voiceover')}
+            videoRef={videoRef}
+            onSaved={load}
+          />
         </div>
 
         {/* --------------------------------------------------------- tabs */}

@@ -120,6 +120,7 @@ export function registerIpc(): void {
   handle('recording:cancel', (recordingId: string) => recording.cancelRecording(recordingId))
   handle('voiceover:start', (recordingId: string) => recording.startVoiceover(recordingId))
   handle('voiceover:finalize', (recordingId: string) => recording.finalizeVoiceover(recordingId))
+  handle('voiceover:cancel', (recordingId: string) => recording.cancelVoiceover(recordingId))
   handle('recording:orphans', () => recording.findOrphans())
 
   /* -------------------------------------------------------------- library */

@@ -162,6 +162,17 @@ const api = {
     pickStorageDir: () => call<AppSettings | null>('settings:pickStorageDir')
   },
   platforms: () => call<Record<PlatformId, PlatformSpec>>('platforms'),
+  stt: {
+    installRoute: () => call<'download' | 'homebrew' | null>('stt:installRoute'),
+    install: () => call<{ bin: string }>('stt:installWhisper'),
+    onInstallProgress: (fn: (p: { fraction: number; note: string }) => void) => {
+      const l = (_e: unknown, p: { fraction: number; note: string }): void => fn(p)
+      ipcRenderer.on('stt:install:progress', l)
+      return (): void => {
+        ipcRenderer.removeListener('stt:install:progress', l)
+      }
+    }
+  },
   diagnostics: () => call<Diagnostics>('diagnostics'),
   appInfo: () =>
     call<{ version: string; platform: string; logPath: string; userData: string }>('app:info'),

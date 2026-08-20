@@ -15,6 +15,7 @@ import * as recording from '../recording.ts'
 import { enqueue, queueDepth } from '../jobs/queue.ts'
 import { llmStatuses } from '../llm/index.ts'
 import { sttStatuses } from '../transcribe/index.ts'
+import { installWhisper, whisperInstallRoute } from '../transcribe/install.ts'
 import { getFfmpegPath, getFfprobePath } from '../media/ffmpeg.ts'
 import { defaultSettings, getSettings, saveSettings, resolveKey } from '../settings.ts'
 import { NoCaptureSourcesError, serializeError } from '../../shared/errors.ts'
@@ -293,6 +294,25 @@ export function registerIpc(): void {
   })
 
   handle('platforms', () => PLATFORMS)
+
+  /**
+   * Windows and Linux fetch whisper.cpp on demand during transcription, so
+   * this exists mostly for macOS, where the only automatic route is Homebrew
+   * and running it unannounced mid-job would be rude.
+   */
+  handle('stt:installWhisper', async (): Promise<{ bin: string }> => {
+    const s = getSettings()
+    const modelDir = join(app.getPath('userData'), 'models')
+    const send = (fraction: number, note: string): void => {
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('stt:install:progress', { fraction, note })
+      }
+    }
+    const bin = await installWhisper(s.whisperBin, modelDir, send)
+    return { bin }
+  })
+
+  handle('stt:installRoute', () => whisperInstallRoute())
 
   handle('diagnostics', async (): Promise<Diagnostics> => {
     const s = getSettings()

@@ -57,13 +57,19 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
 
+# nsis and portable both produce a .exe, so they need names that differ.
+# Sharing one artifactName makes the second target overwrite the first, and
+# re-uploading a 100MB asset to GitHub is what timed out the v0.1.0 release.
 nsis:
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
+
+portable:
+  artifactName: ${productName}-${version}-${arch}-portable.${ext}
 
 linux:
   target:

@@ -66,9 +66,21 @@ tracks, streamed to disk in two-second chunks. A crash mid-recording leaves a
 playable file behind rather than a corrupt one. There is a countdown, a live
 level meter, and a hint if your microphone has gone quiet for too long.
 
-**Transcribe.** `whisper.cpp` runs on your machine. The ~140MB English model
-downloads once, on first use. Nothing leaves your computer unless you
-explicitly point Showoff at Groq or OpenAI in Settings.
+**Transcribe.** `whisper.cpp` runs on your machine, and nothing leaves your
+computer unless you explicitly point Showoff at Groq or OpenAI in Settings.
+The ~140MB English model downloads once, on first use.
+
+Getting `whisper.cpp` itself differs by platform, because upstream only
+publishes ready-to-run binaries for some of them:
+
+| Platform | How Showoff gets it |
+| --- | --- |
+| Windows, Linux | Downloaded automatically (~8MB) the first time you transcribe |
+| macOS | `brew install whisper-cpp` — Settings → Models has a button that runs it, or run it yourself |
+
+If you would rather not install anything, put a Groq or OpenAI API key in
+Settings and transcription happens in the cloud instead. Settings → Models
+always shows which one you are actually using.
 
 **Ask.** Before cutting, Showoff reads the transcript and asks you three or
 four questions it genuinely cannot answer on its own — what the product is
@@ -145,7 +157,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 | What | Where |
 | --- | --- |
 | Recordings, clips, bundles | `~/Movies/Showoff` (configurable in Settings) |
-| Database, logs, whisper model | app data dir (`~/Library/Application Support/showoff` on macOS) |
+| Database, logs, whisper model and binary | app data dir (`~/Library/Application Support/showoff` on macOS) |
 
 Deleting a recording in Showoff removes it from the library. **The files stay
 on disk** — nothing here deletes your footage.

@@ -10,6 +10,12 @@ import {
 } from '../../shared/errors.ts'
 import type { ProviderStatus } from '../../shared/types.ts'
 import { log } from '../log.ts'
+import {
+  findWhisperBin,
+  installWhisper,
+  whisperInstallRoute,
+  whisperSpawnEnv
+} from './install.ts'
 
 export interface Segment {
   startMs: number
@@ -44,19 +50,6 @@ export interface SttProvider {
 const WHISPER_MODEL_URL =
   'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'
 const WHISPER_MODEL_NAME = 'ggml-base.en.bin'
-
-function findWhisperBin(configured: string): string | null {
-  const candidates = [
-    configured,
-    process.env.WHISPER_CLI_PATH,
-    '/opt/homebrew/bin/whisper-cli',
-    '/usr/local/bin/whisper-cli',
-    '/opt/homebrew/bin/whisper',
-    '/usr/local/bin/whisper'
-  ].filter(Boolean) as string[]
-  for (const c of candidates) if (existsSync(c)) return c
-  return null
-}
 
 export function resolveWhisperModel(cfg: SttConfig): string | null {
   if (cfg.whisperModel && existsSync(cfg.whisperModel)) return cfg.whisperModel
@@ -130,17 +123,37 @@ export const whisperCppProvider: SttProvider = {
   id: 'whisper-cpp',
   label: 'Whisper (local, whisper.cpp)',
   async available(cfg) {
-    const bin = findWhisperBin(cfg.whisperBin)
-    if (!bin) return { ok: false, detail: 'whisper-cli not found (brew install whisper-cpp)' }
+    const bin = findWhisperBin(cfg.whisperBin, cfg.modelDir)
     const model = resolveWhisperModel(cfg)
+    if (!bin) {
+      // A binary we can fetch unattended is as good as one already here, so
+      // long as we say that is what will happen.
+      if (whisperInstallRoute() === 'download') {
+        return { ok: true, detail: 'whisper.cpp downloads on first use (~8MB)' }
+      }
+      return {
+        ok: false,
+        detail:
+          whisperInstallRoute() === 'homebrew'
+            ? 'not installed yet - Settings can install it with Homebrew'
+            : 'whisper-cli not found, and there is no prebuilt build for this platform'
+      }
+    }
     return {
       ok: true,
       detail: model ? `${basename(bin)} with ${basename(model)}` : `${basename(bin)}, model downloads on first use`
     }
   },
   async transcribe(wavPath, cfg) {
-    const bin = findWhisperBin(cfg.whisperBin)
-    if (!bin) throw TranscriptionUnavailableError('whisper-cli not found')
+    let bin = findWhisperBin(cfg.whisperBin, cfg.modelDir)
+    if (!bin) {
+      // Same bargain as the model: fetch it once, at the moment it is needed,
+      // rather than putting it in the installer.
+      cfg.onProgress?.(0.01, 'Getting Whisper (one time, ~8MB)')
+      bin = await installWhisper(cfg.whisperBin, cfg.modelDir, (f, note) =>
+        cfg.onProgress?.(0.01 + f * 0.01, note)
+      )
+    }
 
     let model = resolveWhisperModel(cfg)
     if (!model) {
@@ -163,7 +176,7 @@ export const whisperCppProvider: SttProvider = {
     ]
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(bin, args, { windowsHide: true })
+      const child = spawn(bin, args, { windowsHide: true, env: whisperSpawnEnv(bin) })
       let stderr = ''
       child.stderr.on('data', (d: Buffer) => {
         const s = d.toString()

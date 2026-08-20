@@ -15,7 +15,13 @@ export default function Settings({ shell }: { shell: Shell }): React.ReactElemen
   const [diag, setDiag] = useState<Diagnostics | null>(null)
   const [checking, setChecking] = useState(true)
   const [info, setInfo] = useState<{ version: string; platform: string; logPath: string } | null>(null)
+  const [sttRoute, setSttRoute] = useState<'download' | 'homebrew' | null>(null)
+  const [installing, setInstalling] = useState<string | null>(null)
   const s = shell.settings
+  // The local provider reports itself unavailable both when nothing is
+  // installed and when nothing can be, so the panel below reads the route to
+  // decide what to offer.
+  const whisperMissing = (diag?.stt ?? []).some((p) => p.id === 'whisper-cpp' && !p.available)
 
   const check = useCallback(async () => {
     setChecking(true)
@@ -26,7 +32,22 @@ export default function Settings({ shell }: { shell: Shell }): React.ReactElemen
   useEffect(() => {
     void check()
     void soft(api.appInfo(), null).then((i) => i && setInfo(i))
+    void soft(api.stt.installRoute(), null).then(setSttRoute)
   }, [check])
+
+  useEffect(() => api.stt.onInstallProgress(({ note }) => setInstalling(note)), [])
+
+  const installWhisper = useCallback(async () => {
+    setInstalling('Starting')
+    const res = await api.stt.install()
+    setInstalling(null)
+    if (res.ok) {
+      toast.ok('Whisper installed', res.data.bin)
+      void check()
+    } else {
+      toast.fail('Could not install Whisper', res.error)
+    }
+  }, [check, toast])
 
   if (!s) {
     return (
@@ -170,7 +191,7 @@ export default function Settings({ shell }: { shell: Shell }): React.ReactElemen
               <Card className="flex flex-col gap-4 p-4">
                 <Field
                   label="Transcription"
-                  hint="whisper.cpp runs entirely on your machine and downloads a ~140MB model the first time. Groq and OpenAI are faster but send your audio to their servers."
+                  hint="whisper.cpp runs entirely on your machine and fetches a ~140MB model the first time. Groq and OpenAI are faster but send your audio to their servers."
                 >
                   <Select value={s.sttProvider} onChange={(e) => set({ sttProvider: e.target.value })}>
                     <option value="auto">Auto</option>
@@ -179,6 +200,28 @@ export default function Settings({ shell }: { shell: Shell }): React.ReactElemen
                     <option value="openai">OpenAI</option>
                   </Select>
                 </Field>
+                {whisperMissing && (
+                  <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                    <div className="min-w-0 flex-1 text-[12px] text-white/60">
+                      {installing
+                        ? installing
+                        : sttRoute === 'homebrew'
+                          ? 'Local transcription needs whisper.cpp. Showoff will run `brew install whisper-cpp`.'
+                          : sttRoute === 'download'
+                            ? 'Local transcription needs whisper.cpp. Showoff downloads it the first time you transcribe.'
+                            : 'No prebuilt whisper.cpp for this platform. Build it and set the path below, or use Groq or OpenAI.'}
+                    </div>
+                    {sttRoute && (
+                      <Button
+                        className="shrink-0"
+                        disabled={installing !== null}
+                        onClick={() => void installWhisper()}
+                      >
+                        {installing ? <Spinner /> : 'Install Whisper'}
+                      </Button>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="whisper-cli path" hint="Leave blank to auto-detect or download.">
                     <Input value={s.whisperBin} onChange={(e) => set({ whisperBin: e.target.value })} />

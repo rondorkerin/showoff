@@ -18,3 +18,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # The whisper.cpp download unpacks through PowerShell and the binary loads
+  # its DLLs from beside itself. Neither can be checked from a Mac, and a
+  # first-run transcription on Windows is exactly where it would break.
+  whisper-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --experimental-strip-types scripts/verify-whisper-install.mjs

@@ -39,6 +39,7 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
   const toast = useToast()
   const [sources, setSources] = useState<CaptureSource[]>([])
   const [loadingSources, setLoadingSources] = useState(true)
+  const [askedForScreen, setAskedForScreen] = useState(false)
   const [sourceId, setSourceId] = useState<string | null>(null)
   const [title, setTitle] = useState('')
   const [projectId, setProjectId] = useState<string | null>(null)
@@ -83,6 +84,25 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
   useEffect(() => {
     void loadSources()
   }, [loadSources])
+
+  /**
+   * macOS shows the screen-recording prompt on the first capture attempt and
+   * never again. If asking changed nothing, the question has already been
+   * answered and only System Settings can undo it.
+   */
+  const askForScreen = useCallback(async () => {
+    const granted = await soft(api.permissions.ask('screen'), false)
+    setAskedForScreen(true)
+    if (granted) {
+      await loadSources()
+    } else {
+      toast.push({
+        tone: 'info',
+        title: 'macOS did not grant screen recording',
+        body: 'Turn Showoff on under Privacy & Security → Screen & System Audio Recording, then quit and reopen Showoff.'
+      })
+    }
+  }, [loadSources, toast])
 
   // Device labels are blank until a permission has been granted once, so the
   // list is refreshed after any getUserMedia call rather than only at mount.
@@ -268,12 +288,22 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
               }
               body={
                 perms && perms.screen !== 'granted'
-                  ? 'macOS keeps screen capture behind a system permission, and it will not prompt again once it has been answered. Turn Showoff on under Screen & System Audio Recording, then quit and reopen Showoff — macOS only picks the change up on a fresh launch.'
+                  ? askedForScreen
+                    ? 'macOS has already been asked, and it will not raise the prompt a second time. Turn Showoff on under Screen & System Audio Recording, then quit and reopen Showoff — macOS only picks the change up on a fresh launch.'
+                    : 'macOS keeps screen capture behind a system permission. Ask for it and macOS will show the prompt, unless it has been answered before — in which case the switch has to be flipped in System Settings.'
                   : 'No displays or windows came back. This is usually a permission that was granted to a different copy of the app.'
               }
               action={
                 <div className="flex gap-2">
-                  <Button variant="primary" onClick={() => void api.permissions.open('screen')}>
+                  {perms && perms.screen !== 'granted' && !askedForScreen && (
+                    <Button variant="primary" onClick={() => void askForScreen()}>
+                      Allow screen recording
+                    </Button>
+                  )}
+                  <Button
+                    variant={askedForScreen ? 'primary' : 'default'}
+                    onClick={() => void api.permissions.open('screen')}
+                  >
                     Open System Settings
                   </Button>
                   <Button onClick={() => void loadSources()}>Try again</Button>

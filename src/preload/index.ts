@@ -87,7 +87,7 @@ const api = {
     status: () =>
       call<{ screen: string; microphone: string; camera: string }>('permissions:status'),
     open: (kind: 'screen' | 'microphone' | 'camera') => call<boolean>('permissions:open', kind),
-    ask: (kind: 'microphone' | 'camera') => call<boolean>('permissions:ask', kind)
+    ask: (kind: 'microphone' | 'camera' | 'screen') => call<boolean>('permissions:ask', kind)
   },
   recording: {
     start: (input: { title: string; projectId: string | null; kinds: TrackKind[] }) =>

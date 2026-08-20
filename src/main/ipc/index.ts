@@ -89,9 +89,23 @@ export function registerIpc(): void {
     return true
   })
 
-  handle('permissions:ask', async (kind: 'microphone' | 'camera') => {
+  handle('permissions:ask', async (kind: 'microphone' | 'camera' | 'screen') => {
     if (process.platform !== 'darwin') return true
-    return await systemPreferences.askForMediaAccess(kind)
+    if (kind !== 'screen') return await systemPreferences.askForMediaAccess(kind)
+
+    // Screen recording has no askForMediaAccess equivalent. macOS raises the
+    // prompt when an app first tries to capture, and never again once the
+    // question has been answered -- so the honest thing is to attempt a
+    // capture and report back whether it actually changed anything.
+    try {
+      await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 1, height: 1 }
+      })
+    } catch (e) {
+      log.debug('ipc', 'screen permission probe failed', { error: serializeError(e).message })
+    }
+    return systemPreferences.getMediaAccessStatus('screen') === 'granted'
   })
 
   handle('recording:start', (input: { title: string; projectId: string | null; kinds: TrackKind[] }) =>

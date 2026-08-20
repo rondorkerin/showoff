@@ -18,7 +18,20 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
   if (!app.isPackaged) return null
 
   try {
-    const { autoUpdater } = await import('electron-updater')
+    // electron-updater is CommonJS, so a dynamic import hands back the module
+    // namespace with everything under `default` once bundled. Reading
+    // `autoUpdater` off the namespace directly gets undefined, and the first
+    // property set on it throws -- which is how this check silently did
+    // nothing in every packaged build.
+    const mod = (await import('electron-updater')) as unknown as {
+      autoUpdater?: typeof import('electron-updater').autoUpdater
+      default?: { autoUpdater?: typeof import('electron-updater').autoUpdater }
+    }
+    const autoUpdater = mod.autoUpdater ?? mod.default?.autoUpdater
+    if (!autoUpdater) {
+      log.debug('updates', 'electron-updater did not expose autoUpdater')
+      return null
+    }
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = false
     autoUpdater.logger = null

@@ -31,9 +31,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }): Reac
   const push = useCallback((t: Omit<Toast, 'id'>) => {
     const id = ++seq.current
     setToasts((list) => [...list, { ...t, id }])
-    // Failures stay until dismissed: an error that vanishes before you finish
-    // reading it is the same as no error at all.
-    if (t.tone !== 'bad') setTimeout(() => setToasts((l) => l.filter((x) => x.id !== id)), 4200)
+    // Failures linger far longer than successes — an error that vanishes before
+    // you finish reading it is the same as no error at all — but they still go
+    // away, because a permanent stack of toasts covers the app.
+    setTimeout(
+      () => setToasts((l) => l.filter((x) => x.id !== id)),
+      t.tone === 'bad' ? 15000 : 4200
+    )
   }, [])
 
   const value = useMemo<ToastApi>(

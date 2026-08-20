@@ -76,7 +76,7 @@ export default function Library({ shell }: { shell: Shell }): React.ReactElement
             <Select
               value={projectId ?? ''}
               onChange={(e) => setProjectId(e.target.value || null)}
-              className="w-[180px] py-1.5 text-[12px]"
+              className="w-[180px] shrink-0 py-1.5 text-[12px]"
             >
               <option value="">All projects</option>
               {shell.projects.map((p) => (

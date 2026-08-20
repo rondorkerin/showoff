@@ -170,19 +170,25 @@ export function registerIpc(): void {
     return buildShareText(clip.description, clip.hashtags as unknown as string[])
   })
 
-  handle('export:bundle', async (recordingId: string) => {
+  // `parentDir` is optional: without it the user picks a folder. With it the
+  // caller has already chosen, which is what makes this path testable.
+  handle('export:bundle', async (recordingId: string, parentDir?: string) => {
     const rec = await repo.getRecording(recordingId)
     if (!rec) throw new Error('Recording not found')
     const clips = await repo.listClips(recordingId)
 
-    const picked = await dialog.showOpenDialog({
-      title: 'Where should the bundle go?',
-      properties: ['openDirectory', 'createDirectory'],
-      defaultPath: app.getPath('downloads')
-    })
-    if (picked.canceled || picked.filePaths.length === 0) return { cancelled: true, dir: '' }
+    let parent = parentDir
+    if (!parent) {
+      const picked = await dialog.showOpenDialog({
+        title: 'Where should the bundle go?',
+        properties: ['openDirectory', 'createDirectory'],
+        defaultPath: app.getPath('downloads')
+      })
+      if (picked.canceled || picked.filePaths.length === 0) return { cancelled: true, dir: '' }
+      parent = picked.filePaths[0]
+    }
 
-    const outDir = join(picked.filePaths[0], `showoff-${slugify(rec.title) || 'recording'}`)
+    const outDir = join(parent, `showoff-${slugify(rec.title) || 'recording'}`)
     mkdirSync(outDir, { recursive: true })
 
     let written = 0

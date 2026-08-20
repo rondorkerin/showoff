@@ -137,8 +137,12 @@ const api = {
   search: (q: string) => call<SearchHit[]>('search', q),
   tags: () => call<string[]>('tags:list'),
   stats: () => call<{ recordings: number; clips: number; minutes: number }>('stats'),
-  exportBundle: (recordingId: string) =>
-    call<{ cancelled: boolean; dir: string; clips?: number }>('export:bundle', recordingId),
+  exportBundle: (recordingId: string, parentDir?: string) =>
+    call<{ cancelled: boolean; dir: string; clips?: number }>(
+      'export:bundle',
+      recordingId,
+      parentDir
+    ),
   shell: {
     showItem: (path: string) => call<boolean>('shell:showItem', path),
     openPath: (path: string) => call<boolean>('shell:openPath', path),

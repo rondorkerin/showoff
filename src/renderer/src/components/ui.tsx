@@ -80,23 +80,37 @@ export function Field({
 const inputBase =
   'w-full rounded-[10px] border border-[#262a31] bg-[#0f1115] px-3 py-2 text-[13px] text-[#e9eaec] placeholder:text-[#565d68] outline-none focus:border-[#F5A524]/60 no-drag'
 
+/**
+ * Tailwind decides between two width utilities by stylesheet order, not by the
+ * order they appear in the attribute, so a caller's `w-[160px]` silently loses
+ * to the base `w-full`. Drop the default when the caller names a width.
+ */
+function base(className?: string): string {
+  return className && /(^|\s)w-/.test(className) ? inputBase.replace('w-full ', '') : inputBase
+}
+
 export function Input(
   props: React.InputHTMLAttributes<HTMLInputElement>
 ): React.ReactElement {
-  return <input {...props} className={cls(inputBase, props.className)} />
+  return <input {...props} className={cls(base(props.className), props.className)} />
 }
 
 export function Textarea(
   props: React.TextareaHTMLAttributes<HTMLTextAreaElement>
 ): React.ReactElement {
-  return <textarea {...props} className={cls(inputBase, 'resize-y leading-relaxed', props.className)} />
+  return (
+    <textarea
+      {...props}
+      className={cls(base(props.className), 'resize-y leading-relaxed', props.className)}
+    />
+  )
 }
 
 export function Select(
   props: React.SelectHTMLAttributes<HTMLSelectElement>
 ): React.ReactElement {
   return (
-    <select {...props} className={cls(inputBase, 'appearance-none pr-8', props.className)}>
+    <select {...props} className={cls(base(props.className), 'appearance-none pr-8', props.className)}>
       {props.children}
     </select>
   )

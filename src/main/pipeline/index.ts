@@ -437,9 +437,12 @@ export async function indexRecording(recordingId: string): Promise<{ chunks: num
   const chunks: Array<{ kind: string; refId: string | null; text: string; startMs: number | null; endMs: number | null }> = []
 
   if (transcript) {
-    // ~45s windows: long enough to hold an idea, short enough to point at a moment.
+    // ~20s windows, each keeping the previous window's last segment. Long
+    // enough to hold an idea, short enough that a hit points at a moment rather
+    // than a minute — and the overlap means a sentence that straddles a
+    // boundary is still findable from either side.
     let buf: typeof transcript.segments = []
-    const flush = (): void => {
+    const flush = (carryOver: boolean): void => {
       if (buf.length === 0) return
       chunks.push({
         kind: 'segment',
@@ -448,13 +451,13 @@ export async function indexRecording(recordingId: string): Promise<{ chunks: num
         startMs: buf[0].start_ms,
         endMs: buf[buf.length - 1].end_ms
       })
-      buf = []
+      buf = carryOver && buf.length > 1 ? [buf[buf.length - 1]] : []
     }
     for (const seg of transcript.segments) {
       buf.push(seg)
-      if (buf[buf.length - 1].end_ms - buf[0].start_ms >= 45000) flush()
+      if (buf[buf.length - 1].end_ms - buf[0].start_ms >= 20000) flush(true)
     }
-    flush()
+    flush(false)
   }
 
   for (const c of clips) {

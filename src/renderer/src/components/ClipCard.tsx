@@ -152,7 +152,7 @@ export default function ClipCard({
           )}
 
           <Textarea
-            rows={4}
+            rows={5}
             value={description}
             onChange={(e) => {
               setDescription(e.target.value)

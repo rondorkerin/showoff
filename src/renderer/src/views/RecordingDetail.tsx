@@ -119,7 +119,7 @@ export default function RecordingDetail({
               await soft(api.recordings.update({ id, projectId: e.target.value || null }), undefined)
               void load()
             }}
-            className="w-[160px] py-1.5 text-[12px]"
+            className="w-[160px] shrink-0 py-1.5 text-[12px]"
           >
             <option value="">No project</option>
             {shell.projects.map((p) => (
@@ -157,7 +157,7 @@ export default function RecordingDetail({
             onChange={(e) => setTagInput(e.target.value)}
             onBlur={() => void saveTags()}
             placeholder="tags, comma separated"
-            className="w-[220px] py-1 text-[11.5px]"
+            className="w-[220px] shrink-0 py-1 text-[11.5px]"
           />
         </div>
       </header>

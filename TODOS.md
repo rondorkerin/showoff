@@ -36,6 +36,12 @@ disk.
 
 - Builds are unsigned, so both operating systems warn on first launch. Signing
   needs a paid developer account.
+- Local transcription on macOS needs Homebrew. whisper.cpp publishes ready-to-run
+  binaries for Windows and Linux, which Showoff downloads on first use, but the
+  only macOS artifact upstream is an xcframework -- a library, not a CLI. So a
+  Mac without Homebrew has to build whisper.cpp itself or use Groq or OpenAI.
+  *Unblocks when:* upstream ships a macOS CLI build, or bundling one is worth
+  the installer size.
 - Finalizing a recording re-encodes VP8 → H.264, which takes roughly as long as
   the recording itself on an M-series laptop. It runs in the background queue.
 - Clarifying questions and clip planning need a working LLM provider. Without

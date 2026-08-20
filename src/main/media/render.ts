@@ -234,10 +234,18 @@ export async function renderClip(opts: RenderClipOptions): Promise<RenderClipRes
     )
   }
 
+  // The background is blurred beyond recognition anyway, so blur it at a
+  // quarter of the output size and scale back up. gblur is O(area), and this
+  // is the single biggest cost in the whole render.
+  const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
+  const bgW = even(W / 4)
+  const bgH = even(H / 4)
+
   filters.push('[0:v]split=2[bg][fg]')
   filters.push(
-    `[bg]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
-      `gblur=sigma=${Math.max(8, Math.round(W / 45))},eq=brightness=-0.18:saturation=0.7[bgb]`
+    `[bg]scale=${bgW}:${bgH}:force_original_aspect_ratio=increase,crop=${bgW}:${bgH},` +
+      `gblur=sigma=${Math.max(2, Math.round(bgW / 45))},eq=brightness=-0.18:saturation=0.7,` +
+      `scale=${W}:${H}[bgb]`
   )
   filters.push(`[fg]scale=${W}:${H}:force_original_aspect_ratio=decrease,setsar=1[fgs]`)
   filters.push(`[bgb][fgs]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2[base]`)
@@ -274,7 +282,7 @@ export async function renderClip(opts: RenderClipOptions): Promise<RenderClipRes
     '-c:v',
     'libx264',
     '-preset',
-    'medium',
+    'faster',
     '-crf',
     '21',
     '-pix_fmt',

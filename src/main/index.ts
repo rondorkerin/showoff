@@ -14,6 +14,12 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'showoff', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false } }
 ])
 
+// Opt-in remote debugging so the app can be driven and screenshotted headlessly
+// during development. Never on unless the env var is explicitly set.
+if (process.env.SHOWOFF_DEBUG_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.SHOWOFF_DEBUG_PORT)
+}
+
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {

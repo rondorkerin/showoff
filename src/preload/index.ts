@@ -9,12 +9,16 @@ import type {
   Note,
   Project,
   Recording,
+  Interrupted,
   Lane,
   LanePatch,
   LoopbackStatus,
   Aspect,
   TranscriptSegment,
-  LaneKind
+  LaneKind,
+  UpdateInfo,
+  UpdateStatus,
+  InstallResult
 } from '../shared/types.ts'
 import type { PlatformId, PlatformSpec } from '../shared/platforms.ts'
 
@@ -143,7 +147,13 @@ const api = {
     get: (id: string) => call<RecordingDetail | null>('recordings:get', id),
     update: (p: { id: string; title?: string; projectId?: string | null }) =>
       call<void>('recordings:update', p),
+    // Removes the row but leaves every file where it is.
     remove: (id: string) => call<void>('recordings:delete', id),
+    // Removes the row and sends the recording folder to the Trash.
+    trash: (id: string) => call<void>('recordings:trash', id),
+    interrupted: () => call<Interrupted[]>('recordings:interrupted'),
+    recover: (id: string) => call<JobEvent>('recordings:recover', id),
+    discard: (id: string) => call<void>('recordings:discard', id),
     setTags: (id: string, tags: string[]) => call<void>('recordings:tags', { id, tags })
   },
   pipeline: {
@@ -167,6 +177,13 @@ const api = {
   },
   notes: {
     save: (p: { recordingId: string; title: string; body: string }) => call<Note>('notes:save', p)
+  },
+  menu: {
+    /** Resolves to the chosen action id, or null if the menu was dismissed. */
+    recording: (input: { status: string; hasFiles: boolean; x: number; y: number }) =>
+      call<string | null>('menu:recording', input),
+    confirmTrash: (input: { title: string; dir: string }) =>
+      call<boolean>('menu:confirmTrash', input)
   },
   search: (q: string) => call<SearchHit[]>('search', q),
   tags: () => call<string[]>('tags:list'),
@@ -200,6 +217,18 @@ const api = {
       }
     }
   },
+  updates: {
+    status: () => call<UpdateStatus>('updates:status'),
+    check: () => call<UpdateStatus>('updates:check'),
+    install: () => call<InstallResult>('updates:install'),
+    onProgress: (fn: (p: { fraction: number; note: string }) => void) => {
+      const l = (_e: unknown, p: { fraction: number; note: string }): void => fn(p)
+      ipcRenderer.on('update:progress', l)
+      return (): void => {
+        ipcRenderer.removeListener('update:progress', l)
+      }
+    }
+  },
   diagnostics: () => call<Diagnostics>('diagnostics'),
   appInfo: () =>
     call<{ version: string; platform: string; logPath: string; userData: string }>('app:info'),
@@ -208,8 +237,8 @@ const api = {
   /** Turns an absolute file path into a URL the renderer is allowed to load. */
   mediaUrl: (path: string) => `showoff://media/?p=${encodeURIComponent(path)}`,
 
-  onUpdate: (fn: (info: { version: string; url: string; notes: string }) => void) => {
-    const l = (_e: unknown, info: { version: string; url: string; notes: string }): void => fn(info)
+  onUpdate: (fn: (info: UpdateInfo) => void) => {
+    const l = (_e: unknown, info: UpdateInfo): void => fn(info)
     ipcRenderer.on('update:available', l)
     return (): void => {
       ipcRenderer.removeListener('update:available', l)

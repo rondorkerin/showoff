@@ -6,16 +6,32 @@ import { join } from 'node:path'
 import { runFfmpeg, probe } from '../src/main/media/ffmpeg.ts'
 import {
   remuxToMp4,
-  muxTracks,
   extractAudioWav,
   posterFrame,
   detectSilence,
-  renderClip
+  renderComposite
 } from '../src/main/media/render.ts'
+import { FULL_FRAME, DEFAULT_FRAME } from '../src/shared/types.ts'
 import { buildAss, cuesForWindow, splitCue } from '../src/main/media/captions.ts'
 import { PLATFORMS } from '../src/shared/platforms.ts'
 
 process.env.SHOWOFF_QUIET = '1'
+
+/** A lane with the defaults the editor gives a freshly captured track. */
+function lane(kind, path, over = {}) {
+  return {
+    kind,
+    path,
+    offsetMs: 0,
+    inMs: 0,
+    outMs: null,
+    sourceMs: null,
+    gain: 1,
+    ducks: false,
+    frame: kind === 'webcam' ? DEFAULT_FRAME : FULL_FRAME,
+    ...over
+  }
+}
 
 let dir
 let sourceWebm
@@ -64,7 +80,7 @@ test('remux webm to a seekable mp4', async () => {
   assert.ok(info.hasAudio)
 })
 
-test('mux a silent video track with a separate audio track', async () => {
+test('a silent video lane and a separate audio lane come out as one file', async () => {
   const silent = join(dir, 'silent.mp4')
   await runFfmpeg([
     '-f', 'lavfi', '-i', 'testsrc=size=640x360:rate=30:duration=5',
@@ -76,9 +92,17 @@ test('mux a silent video track with a separate audio track', async () => {
   ])
 
   const out = join(dir, 'muxed.mp4')
-  const info = await muxTracks(silent, audio, out)
-  assert.ok(info.hasVideo, 'muxed file must keep video')
-  assert.ok(info.hasAudio, 'muxed file must gain the mic audio')
+  await renderComposite({
+    lanes: [lane('screen', silent), lane('mic', audio)],
+    width: 640,
+    height: 360,
+    startMs: 0,
+    endMs: 5000,
+    outputPath: out
+  })
+  const info = await probe(out)
+  assert.ok(info.hasVideo, 'the composite must keep video')
+  assert.ok(info.hasAudio, 'the composite must gain the mic audio')
 })
 
 test('extract 16k mono wav for whisper', async () => {
@@ -165,16 +189,17 @@ test('renders a real clip for every platform at the right dimensions', async () 
 
   for (const spec of Object.values(PLATFORMS)) {
     const out = join(dir, `clip-${spec.id}.mp4`)
-    const res = await renderClip({
-      masterPath: master,
-      webcamPath: null,
-      outputPath: out,
+    const res = await renderComposite({
+      // Video lanes are silent by construction -- sound comes from its own
+      // lane -- so a clip without a mic lane would have nothing to keep.
+      lanes: [lane('screen', master), lane('mic', join(dir, 'mic.m4a'))],
+      width: spec.width,
+      height: spec.height,
       startMs: 2000,
       endMs: 8000,
-      platform: spec.id,
+      outputPath: out,
       captions: cues,
-      burnCaptions: true,
-      webcamPip: false
+      burnCaptions: true
     })
     assert.equal(res.width, spec.width, `${spec.id} width`)
     assert.equal(res.height, spec.height, `${spec.id} height`)
@@ -194,34 +219,31 @@ test('renders a vertical clip with webcam picture-in-picture', async () => {
   await remuxToMp4(camWebm, cam)
 
   const out = join(dir, 'clip-pip.mp4')
-  const res = await renderClip({
-    masterPath: master,
-    webcamPath: cam,
-    outputPath: out,
+  const res = await renderComposite({
+    lanes: [lane('screen', master), lane('webcam', cam)],
+    width: 1080,
+    height: 1920,
     startMs: 1000,
     endMs: 5000,
-    platform: 'youtube_short',
-    captions: [],
-    burnCaptions: false,
-    webcamPip: true
+    outputPath: out
   })
   assert.equal(res.width, 1080)
   assert.equal(res.height, 1920)
   assert.ok(res.bytes > 5000)
 })
 
-test('a missing webcam file degrades to no-pip instead of failing the render', async () => {
+test('a missing lane file degrades to leaving it out instead of failing the render', async () => {
   const out = join(dir, 'clip-nopip.mp4')
-  const res = await renderClip({
-    masterPath: join(dir, 'master.mp4'),
-    webcamPath: join(dir, 'does-not-exist.mp4'),
-    outputPath: out,
+  const res = await renderComposite({
+    lanes: [
+      lane('screen', join(dir, 'master.mp4')),
+      lane('webcam', join(dir, 'does-not-exist.mp4'))
+    ],
+    width: 1080,
+    height: 1920,
     startMs: 0,
     endMs: 3000,
-    platform: 'x',
-    captions: [],
-    burnCaptions: false,
-    webcamPip: true
+    outputPath: out
   })
   assert.ok(res.bytes > 5000, 'clip should still render without the webcam')
 })

@@ -12,6 +12,7 @@ import { basename, join } from 'node:path'
 import * as repo from '../db/repo.ts'
 import * as pipeline from '../pipeline/index.ts'
 import * as recording from '../recording.ts'
+import { confirmTrash, recordingMenu } from '../menus.ts'
 import { reconcileLanes } from '../lanes.ts'
 import { exportRecording, suggestedFilename } from '../export.ts'
 import { installLoopback, loopbackStatus } from '../audio/loopback.ts'
@@ -26,6 +27,7 @@ import { PLATFORMS, type PlatformId } from '../../shared/platforms.ts'
 import type { AppSettings, Aspect, Diagnostics, LaneKind, LanePatch } from '../../shared/types.ts'
 import { getDb } from '../db/index.ts'
 import { log } from '../log.ts'
+import { checkForUpdates, installUpdate, updateStatus } from '../updates.ts'
 import { slugify } from '../pipeline/index.ts'
 
 /**
@@ -172,6 +174,21 @@ export function registerIpc(): void {
     repo.updateProject(p.id, p)
   )
   handle('projects:delete', (id: string) => repo.deleteProject(id))
+
+  handle('recordings:trash', (id: string) => recording.trashRecording(id))
+  handle('recordings:interrupted', () => recording.listInterrupted())
+  handle('recordings:recover', (id: string) =>
+    enqueue('finalize', id, (onProgress) =>
+      recording.recoverRecording(id, (stage, f) => onProgress(stage, f))
+    )
+  )
+  handle('recordings:discard', (id: string) => recording.discardInterrupted(id))
+  handle('menu:recording', (input: { status: string; hasFiles: boolean; x: number; y: number }) =>
+    recordingMenu(input)
+  )
+  handle('menu:confirmTrash', (input: { title: string; dir: string }) =>
+    confirmTrash(input.title, input.dir)
+  )
 
   handle('recordings:list', (projectId: string | null) => repo.listRecordings(projectId))
   handle('recordings:get', async (id: string) => {
@@ -446,6 +463,10 @@ export function registerIpc(): void {
       storageDir: s.storageDir
     }
   })
+
+  handle('updates:status', () => updateStatus())
+  handle('updates:check', () => checkForUpdates())
+  handle('updates:install', () => installUpdate())
 
   handle('app:info', () => ({
     version: app.getVersion(),

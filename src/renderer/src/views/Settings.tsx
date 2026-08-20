@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { api, soft } from '../lib/api.ts'
+import { api, must, soft } from '../lib/api.ts'
 import { cls } from '../lib/format.ts'
 import { Badge, Button, Card, Field, Input, Select, Spinner, Textarea, Toggle } from '../components/ui.tsx'
 import { useToast } from '../components/Toasts.tsx'
 import { PLATFORMS, PLATFORM_IDS, type PlatformId } from '../../../shared/platforms.ts'
 import type { Shell } from '../App.tsx'
-import type { AppSettings, Diagnostics, ProviderStatus } from '../../../shared/types.ts'
+import type {
+  AppSettings,
+  Diagnostics,
+  ProviderStatus,
+  UpdateStatus
+} from '../../../shared/types.ts'
 
 type Section = 'providers' | 'output' | 'prompts' | 'storage'
 
@@ -383,6 +388,7 @@ export default function Settings({ shell }: { shell: Shell }): React.ReactElemen
                     <Row k="Platform" v={info.platform} />
                     <Row k="Log file" v={info.logPath} />
                   </dl>
+                  <Updates />
                   <div className="mt-3 flex gap-2">
                     <Button size="sm" variant="ghost" onClick={() => void soft(api.shell.showItem(info.logPath), false)}>
                       Show log
@@ -401,6 +407,106 @@ export default function Settings({ shell }: { shell: Shell }): React.ReactElemen
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Says out loud whether this copy is the current one.
+ *
+ * A hand-built copy sitting in /Applications looks exactly like a released one
+ * from the inside, and the only way to know is to ask -- so this asks on open
+ * rather than waiting to be prodded.
+ */
+function Updates(): React.ReactElement {
+  const toast = useToast()
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState<{ fraction: number; note: string } | null>(null)
+
+  useEffect(() => {
+    void soft(api.updates.status(), null).then((st) => {
+      setStatus(st)
+      // A status with no check behind it says nothing; go get one.
+      if (!st?.checkedAt) void soft(api.updates.check(), null).then(setStatus)
+    })
+    return api.updates.onProgress(setProgress)
+  }, [])
+
+  const check = async (): Promise<void> => {
+    setBusy(true)
+    setStatus(await soft(api.updates.check(), status))
+    setBusy(false)
+  }
+
+  const install = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await must(api.updates.install())
+      if (res.action === 'handoff') {
+        toast.ok(
+          'Installer downloaded',
+          'Drag Showoff into Applications, replacing the copy that is there.'
+        )
+      }
+    } catch (e) {
+      toast.fail('Could not fetch the update', e)
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+
+  if (!status) return <></>
+  const up = status.available
+
+  return (
+    <div className="mt-3 border-t border-[#1d2026] pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {up ? (
+          <Badge tone="accent">{up.version} available</Badge>
+        ) : status.error ? (
+          <Badge tone="neutral">could not check</Badge>
+        ) : status.checkedAt ? (
+          <Badge tone="good">up to date</Badge>
+        ) : (
+          <Spinner />
+        )}
+        {!status.packaged && (
+          <span className="text-[11.5px] text-[#6b727d]">running from source</span>
+        )}
+        <span className="flex-1" />
+        <Button size="sm" variant="ghost" onClick={() => void check()} loading={busy && !progress}>
+          Check now
+        </Button>
+        {up && (
+          <Button size="sm" variant="primary" onClick={() => void install()} loading={busy}>
+            {status.route === 'auto' ? 'Update and restart' : 'Download update'}
+          </Button>
+        )}
+      </div>
+
+      {progress && (
+        <div className="mt-2.5">
+          <div className="h-[4px] w-full overflow-hidden rounded-full bg-[#1d2026]">
+            <div
+              className="h-full rounded-full bg-[#F5A524] transition-[width]"
+              style={{ width: `${Math.round(progress.fraction * 100)}%` }}
+            />
+          </div>
+          <div className="mt-1 text-[11.5px] text-[#6b727d]">
+            {progress.note} · {Math.round(progress.fraction * 100)}%
+          </div>
+        </div>
+      )}
+
+      {up && !progress && (
+        <p className="mt-2 text-[11.5px] leading-relaxed text-[#6b727d]">
+          {status.route === 'assist'
+            ? 'Showoff downloads the disk image and opens it for you. Because the app fetches it directly, macOS does not put it behind the “downloaded from the internet” warning.'
+            : 'Showoff downloads it and restarts into the new version.'}
+        </p>
+      )}
     </div>
   )
 }

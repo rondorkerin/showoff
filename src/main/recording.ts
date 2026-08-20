@@ -1,12 +1,29 @@
-import { app } from 'electron'
-import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync, type WriteStream } from 'node:fs'
+import { app, shell } from 'electron'
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  type WriteStream
+} from 'node:fs'
 import { join } from 'node:path'
 import * as repo from './db/repo.ts'
 import { pcmToM4a, posterFrame, probe, probeWithDecode, remuxToMp4 } from './media/render.ts'
 import { abortCapture, captureFormat, sidecarSupported, startCapture, stopCapture } from './audio/capture.ts'
 import { getSettings } from './settings.ts'
 import { EmptyRecordingError, NotFoundError } from '../shared/errors.ts'
-import { DEFAULT_FRAME, FULL_FRAME, isVideoLane, type LaneKind } from '../shared/types.ts'
+import {
+  DEFAULT_FRAME,
+  FULL_FRAME,
+  isVideoLane,
+  type Interrupted,
+  type LaneKind
+} from '../shared/types.ts'
+
+export type { Interrupted }
 import { log } from './log.ts'
 
 interface OpenTrack {
@@ -192,6 +209,35 @@ export async function finalizeRecording(
   }
   sessions.delete(recordingId)
 
+  return assembleRecording(
+    recordingId,
+    session.dir,
+    finished,
+    systemPcm,
+    systemOffsetMs,
+    totalBytes,
+    onProgress
+  )
+}
+
+/**
+ * Turns whatever finished files are on disk into lanes and marks the recording
+ * ready.
+ *
+ * Split out of finalizeRecording so a recording that was interrupted -- the app
+ * quit, the machine slept, something crashed -- can be put back together from
+ * the same files by the same code, rather than by a second implementation that
+ * drifts from this one.
+ */
+async function assembleRecording(
+  recordingId: string,
+  dir: string,
+  finished: Map<LaneKind, string>,
+  systemPcm: string | null,
+  systemOffsetMs: number,
+  bytes: number,
+  onProgress: (stage: string, fraction: number) => void
+): Promise<FinalizeResult> {
   const screenWebm = finished.get('screen')
   const micWebm = finished.get('mic')
   const camWebm = finished.get('webcam')
@@ -216,7 +262,7 @@ export async function finalizeRecording(
     at: number
   ): Promise<void> => {
     onProgress(stage, at)
-    const out = join(session.dir, outName)
+    const out = join(dir, outName)
     let info = await remuxToMp4(webm, out)
     if (info.durationMs === 0) info = await probeWithDecode(out)
     made.push({ kind, path: out, info })
@@ -228,7 +274,7 @@ export async function finalizeRecording(
   if (sysWebm) await convert('system', sysWebm, 'system.m4a', 'Converting computer audio', 0.8)
   else if (systemPcm) {
     onProgress('Converting computer audio', 0.8)
-    const out = join(session.dir, 'system.m4a')
+    const out = join(dir, 'system.m4a')
     const info = await pcmToM4a(systemPcm, out, captureFormat())
     // Raw f32 is ~11 MB a minute. The .webm intermediates are kept as a safety
     // net because they are the only copy of a compressed stream; this one is
@@ -245,7 +291,7 @@ export async function finalizeRecording(
   try {
     poster = await posterFrame(
       primary.path,
-      join(session.dir, 'poster.jpg'),
+      join(dir, 'poster.jpg'),
       Math.min(1, durationMs / 2000),
       640
     )
@@ -275,11 +321,11 @@ export async function finalizeRecording(
     posterPath: poster
   })
 
-  log.info('recording', 'finalized', {
+  log.info('recording', 'assembled', {
     recordingId,
     durationMs,
     lanes: made.length,
-    bytes: totalBytes
+    bytes
   })
 
   return {
@@ -289,6 +335,139 @@ export async function finalizeRecording(
     height: primary.info.height,
     posterPath: poster
   }
+}
+
+
+/* --------------------------------------------------- interrupted recordings */
+
+/** Which lane a file left on disk belongs to, from its name. */
+function kindFromFile(name: string): LaneKind | null {
+  const base = name.replace(/\.part$/, '').replace(/\.(webm|mp4|m4a|pcm)$/, '')
+  const stem = base.replace(/-\d+$/, '')
+  const kinds: LaneKind[] = ['screen', 'webcam', 'mic', 'system', 'voiceover']
+  return kinds.find((k) => k === stem) ?? null
+}
+
+/**
+ * Recordings the database still believes are in progress.
+ *
+ * A row is created the moment recording starts and only flipped to 'ready' by
+ * finalize, so anything still marked 'recording' with no live session behind it
+ * is a take that was cut short. The files are usually fine -- chunks are
+ * appended as they arrive, precisely so an interrupted capture leaves something
+ * playable -- they just never got assembled.
+ */
+export async function listInterrupted(): Promise<Interrupted[]> {
+  const rows = await repo.listRecordingsByStatus('recording')
+  const out: Interrupted[] = []
+  for (const rec of rows) {
+    if (sessions.has(rec.id)) continue
+    if (!existsSync(rec.dir)) continue
+    let bytes = 0
+    const kinds = new Set<LaneKind>()
+    for (const f of readdirSync(rec.dir)) {
+      if (!/\.(part|webm|pcm)$/.test(f)) continue
+      const kind = kindFromFile(f)
+      if (!kind) continue
+      const size = statSync(join(rec.dir, f)).size
+      if (size < 1000) continue
+      bytes += size
+      kinds.add(kind)
+    }
+    out.push({
+      recordingId: rec.id,
+      title: rec.title,
+      dir: rec.dir,
+      startedAt: rec.created_at,
+      bytes,
+      kinds: [...kinds]
+    })
+  }
+  return out
+}
+
+/**
+ * Assembles an interrupted recording from whatever reached disk.
+ *
+ * Runs the same assembly finalize does, so a recovered take is not a
+ * second-class one -- it comes back with the same lanes, the same conversions
+ * and the same poster frame.
+ */
+export async function recoverRecording(
+  recordingId: string,
+  onProgress: (stage: string, fraction: number) => void
+): Promise<FinalizeResult> {
+  const rec = await repo.getRecording(recordingId)
+  if (!rec) throw NotFoundError('Recording')
+  if (sessions.has(recordingId)) throw new Error('That recording is still going.')
+  if (!existsSync(rec.dir)) throw EmptyRecordingError('the recording folder is gone')
+
+  onProgress('Looking at what survived', 0.05)
+  const finished = new Map<LaneKind, string>()
+  let systemPcm: string | null = null
+  let bytes = 0
+
+  for (const f of readdirSync(rec.dir).sort()) {
+    const kind = kindFromFile(f)
+    if (!kind) continue
+    const full = join(rec.dir, f)
+    const size = statSync(full).size
+    if (size < 1000) continue
+
+    // Promote anything still marked .part: it is as complete as it is ever
+    // going to get, and leaving the suffix on would hide it from every reader.
+    let path = full
+    if (f.endsWith('.part')) {
+      path = full.replace(/\.part$/, '')
+      renameSync(full, path)
+    }
+    bytes += size
+    if (path.endsWith('.pcm')) systemPcm = path
+    else if (path.endsWith('.webm') && !finished.has(kind)) finished.set(kind, path)
+  }
+
+  if (finished.size === 0 && !systemPcm) {
+    await repo.failRecording(recordingId, 'Nothing usable was written before it stopped.')
+    throw EmptyRecordingError('nothing usable was written')
+  }
+
+  log.info('recording', 'recovering', {
+    recordingId,
+    kinds: [...finished.keys()],
+    hasSystemPcm: Boolean(systemPcm),
+    bytes
+  })
+
+  // Offset is unknowable after the fact -- the process that measured it is
+  // gone -- and 11 ms of drift is not worth refusing to recover a take over.
+  return assembleRecording(recordingId, rec.dir, finished, systemPcm, 0, bytes, onProgress)
+}
+
+/**
+ * Removes a recording and sends its folder to the Trash.
+ *
+ * Trash rather than unlink, deliberately. Deleting from the library used to
+ * leave every byte on disk, which meant "delete" never actually freed anything
+ * and the storage folder grew forever; unlinking instead would make a misclick
+ * unrecoverable. The Trash is the only option that is both honest about
+ * removing the files and forgiving about it.
+ */
+export async function trashRecording(recordingId: string): Promise<void> {
+  const rec = await repo.getRecording(recordingId)
+  if (!rec) return
+  if (sessions.has(recordingId)) throw new Error('That recording is still going.')
+  await repo.deleteRecording(recordingId)
+  try {
+    if (existsSync(rec.dir)) await shell.trashItem(rec.dir)
+  } catch (e) {
+    log.warn('recording', 'could not trash recording folder', { error: String(e) })
+  }
+  log.info('recording', 'moved to trash', { recordingId, dir: rec.dir })
+}
+
+/** Gives up on an interrupted recording, sending its files to the Trash. */
+export async function discardInterrupted(recordingId: string): Promise<void> {
+  await trashRecording(recordingId)
 }
 
 /* ------------------------------------------------------- adding a source */

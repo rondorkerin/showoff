@@ -194,6 +194,17 @@ export interface LoopbackStatus {
   installable: boolean
 }
 
+/** A recording the app was in the middle of when it stopped. */
+export interface Interrupted {
+  recordingId: string
+  title: string
+  dir: string
+  startedAt: string | Date
+  /** Bytes of capture sitting on disk, so the offer can say what is at stake. */
+  bytes: number
+  kinds: LaneKind[]
+}
+
 export interface ProviderStatus {
   id: string
   label: string
@@ -239,4 +250,41 @@ export interface ClarifyingQuestion {
   question: string
   why: string
   suggestion: string
+}
+
+export interface UpdateInfo {
+  version: string
+  /** The release page, for anybody who would rather do it by hand. */
+  url: string
+  notes: string
+  /** Direct download for this platform and architecture, when the release has one. */
+  assetUrl: string | null
+  assetName: string | null
+  bytes: number
+}
+
+/**
+ * How far a build can take an update on its own.
+ *
+ * `auto`   -- download it and relaunch into it (Windows NSIS).
+ * `assist` -- download it and hand the installer over (macOS: the app is
+ *             unsigned, and Squirrel.Mac will not apply an update it cannot
+ *             verify, so pretending otherwise would just fail silently).
+ * `manual` -- open the release page.
+ */
+export type UpdateRoute = 'auto' | 'assist' | 'manual'
+
+export interface UpdateStatus {
+  current: string
+  packaged: boolean
+  route: UpdateRoute
+  available: UpdateInfo | null
+  checkedAt: string | null
+  error: string | null
+}
+
+export interface InstallResult {
+  /** 'relaunch' quits into the installer; 'handoff' opened it for you. */
+  action: 'relaunch' | 'handoff'
+  path?: string
 }

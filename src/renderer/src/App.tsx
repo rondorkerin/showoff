@@ -7,6 +7,8 @@ import Studio from './views/Studio.tsx'
 import Library from './views/Library.tsx'
 import Editor from './views/Editor.tsx'
 import Settings from './views/Settings.tsx'
+import RecordingBar from './components/RecordingBar.tsx'
+import { RecordingProvider, RecordingSync } from './lib/recording.tsx'
 import type { JobEvent } from '../../preload/index.ts'
 import type { AppSettings, Project } from '../../shared/types.ts'
 
@@ -94,14 +96,15 @@ function Inner(): React.ReactElement {
     void soft(api.settings.get(), null).then((s) => s && setSettings(s))
 
     // Anything left half-written by a crash is offered back rather than
-    // silently abandoned in the storage folder.
-    void soft(api.recording.orphans(), []).then((orphans) => {
-      if (orphans.length > 0) {
+    // silently abandoned in the storage folder. Library does the offering --
+    // this only points at it, so the notice cannot be dismissed into oblivion.
+    void soft(api.recordings.interrupted(), []).then((rows) => {
+      if (rows.length > 0) {
         toast.push({
           tone: 'info',
-          title: `${orphans.length} unfinished recording${orphans.length > 1 ? 's' : ''} found`,
-          body: 'Showoff stopped mid-recording last time. The raw files are still on disk.',
-          detail: orphans[0].dir
+          title: `${rows.length} recording${rows.length > 1 ? 's' : ''} did not finish`,
+          body: 'The footage is still on disk. Library can put it back together.',
+          detail: rows[0].dir
         })
       }
     })
@@ -112,7 +115,7 @@ function Inner(): React.ReactElement {
       toast.push({
         tone: 'info',
         title: `Showoff ${info.version} is out`,
-        body: 'Click to open the release page and grab the new build.',
+        body: 'Settings → Storage can download and install it for you.',
         detail: info.url
       })
     })
@@ -169,7 +172,20 @@ function Inner(): React.ReactElement {
 
   const activeJob = jobs.find((j) => j.status === 'running') ?? jobs[0] ?? null
 
+  // Owned here rather than in Studio: the recorder outlives that screen now, so
+  // whatever happens when a take lands has to outlive it too.
+  const onFinalized = useCallback(
+    (id: string) => {
+      toast.ok('Recording saved', 'Transcribing it now.')
+      void api.pipeline.transcribe(id)
+      setRoute({ name: 'recording', id })
+    },
+    [toast]
+  )
+
   return (
+    <RecordingProvider onFinalized={onFinalized}>
+    <RecordingSync onChange={setRecording} />
     <div className={cls('flex h-full', recording && 'recording-chrome')}>
       <aside className="drag-region flex w-[212px] shrink-0 flex-col border-r border-[#1d2026] bg-[#0e0f12] px-3 pb-3 pt-[38px]">
         <div className="mb-5 flex items-center gap-2 px-2">
@@ -225,13 +241,19 @@ function Inner(): React.ReactElement {
         )}
       </aside>
 
-      <main className="min-w-0 flex-1 overflow-hidden">
-        {route.name === 'studio' && <Studio shell={shell} />}
-        {route.name === 'library' && <Library shell={shell} />}
-        {route.name === 'recording' && <Editor shell={shell} id={route.id} />}
-        {route.name === 'settings' && <Settings shell={shell} />}
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {route.name !== 'studio' && (
+          <RecordingBar onOpenStudio={() => setRoute({ name: 'studio' })} />
+        )}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {route.name === 'studio' && <Studio shell={shell} />}
+          {route.name === 'library' && <Library shell={shell} />}
+          {route.name === 'recording' && <Editor shell={shell} id={route.id} />}
+          {route.name === 'settings' && <Settings shell={shell} />}
+        </div>
       </main>
     </div>
+    </RecordingProvider>
   )
 }
 

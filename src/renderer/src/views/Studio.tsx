@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, must, soft } from '../lib/api.ts'
 import { cls, fmtClock } from '../lib/format.ts'
-import { useRecorder } from '../lib/recorder.ts'
+import { useRecording } from '../lib/recording.tsx'
 import { Badge, Button, Card, Empty, Field, Input, Select, Spinner } from '../components/ui.tsx'
 import { useToast } from '../components/Toasts.tsx'
 import type { Shell } from '../App.tsx'
@@ -58,17 +58,9 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
     null
   )
 
-  const onFinalized = useCallback(
-    (id: string) => {
-      shell.setRecording(false)
-      toast.ok('Recording saved', 'Transcribing it now.')
-      void api.pipeline.transcribe(id)
-      shell.go({ name: 'recording', id })
-    },
-    [shell, toast]
-  )
-
-  const rec = useRecorder(onFinalized)
+  // Lives above the router (see lib/recording.tsx), so opening the Library or
+  // Settings mid-take no longer tears the capture down.
+  const rec = useRecording()
 
   const loadSources = useCallback(async () => {
     setLoadingSources(true)
@@ -129,10 +121,6 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
   useEffect(() => {
     if (rec.state.phase === 'recording') void loadDevices()
   }, [rec.state.phase, loadDevices])
-
-  useEffect(() => {
-    shell.setRecording(rec.state.phase === 'recording' || rec.state.phase === 'countdown')
-  }, [rec.state.phase, shell])
 
   useEffect(() => {
     if (rec.state.error) {

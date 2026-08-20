@@ -57,6 +57,13 @@ export async function createRecording(input: {
   return (await one<Recording>('SELECT * FROM recordings WHERE id=$1', [id]))!
 }
 
+/** Used to find recordings a crash left mid-flight. */
+export async function listRecordingsByStatus(status: string): Promise<Recording[]> {
+  return query<Recording>('SELECT * FROM recordings WHERE status=$1 ORDER BY created_at DESC', [
+    status
+  ])
+}
+
 export async function finishRecording(
   id: string,
   patch: {

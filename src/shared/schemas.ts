@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { PLATFORM_IDS } from './platforms'
+import { PLATFORM_IDS } from './platforms.ts'
 
 /**
  * Everything an LLM hands back crosses this boundary. Nothing downstream is
@@ -29,8 +29,13 @@ export const plannedClipSchema = z.object({
   end_seconds: z.coerce.number().min(0)
 })
 
+/**
+ * Deliberately loose at the top level: the individual clips are validated one
+ * at a time so that a single malformed entry drops that clip rather than
+ * throwing away an otherwise good plan.
+ */
 export const clipPlanSchema = z.object({
-  clips: z.array(plannedClipSchema).max(30).default([])
+  clips: z.array(z.unknown()).max(60).default([])
 })
 
 export const notesSchema = z.object({

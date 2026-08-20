@@ -1,4 +1,4 @@
-import type { PlatformId } from './platforms'
+import type { PlatformId } from './platforms.ts'
 
 export type TrackKind = 'screen' | 'mic' | 'webcam' | 'voiceover'
 

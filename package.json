@@ -18,7 +18,7 @@
     "pack:mac": "electron-vite build && electron-builder --mac --publish never",
     "pack:win": "electron-vite build && electron-builder --win --publish never",
     "release": "electron-vite build && electron-builder --mac --win --publish always",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.5",

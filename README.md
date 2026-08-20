@@ -8,7 +8,12 @@ platform-shaped clips — X, LinkedIn, YouTube Shorts, YouTube — each with a
 caption you can edit and copy. Everything is stored in an embedded Postgres
 knowledgebase you can search by meaning, not just keywords.
 
-![Showoff](docs/screenshot-studio.png)
+![Clips cut from one recording](docs/screenshot-clips.png)
+
+<p align="center">
+  <img src="docs/screenshot-transcript.png" width="49%" alt="Transcript with click-to-seek" />
+  <img src="docs/screenshot-library.png" width="49%" alt="Library" />
+</p>
 
 ---
 

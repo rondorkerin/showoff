@@ -11,22 +11,29 @@ that only saves a paste. Download-the-bundle-and-paste ships today and works on
 every platform including the ones without an API worth using.
 *Unblocks when:* someone is posting daily and the paste is the bottleneck.
 
-**Timeline scrubber with manual clip trimming.** Right now clip boundaries come
-from the model, snapped to transcript segments, and you can re-render. A real
-frame-accurate trim UI is a genuine sub-project (waveform rendering, keyboard
-scrubbing, undo). Worth doing when the model's boundaries are the most common
-complaint — not before.
+**~~Timeline scrubber with manual clip trimming.~~** *Reversed 2026-08-20.* Not
+having one turned out to be the complaint, and it arrived before the model's clip
+boundaries ever did. Superseded by `docs/EDITOR-PLAN.md`: lanes with drag-to-place
+and edge-trim. Still deferred inside that plan: splitting a clip, ripple delete,
+and an undo stack — those are what make it an NLE, and lanes being free means you
+never need them.
 
-**System audio capture.** macOS has no supported system-audio path without a
-kernel extension or the ScreenCaptureKit audio API; on Windows it is
-`loopback` via WASAPI. Two entirely separate implementations for a feature most
-builder screencasts do not need — you are talking over your work, not playing
-audio into it.
+**~~System audio capture.~~** *Reversed 2026-08-20, with the platform split
+intact.* Verified against Electron 43.4.1: `Streams.audio: 'loopback'` is
+documented as "currently only supported on Windows" (`electron.d.ts:23743`), so
+Windows is close to free. macOS still has no supported path in Electron itself,
+and rather than bundle a ScreenCaptureKit native addon — which would force the
+code-signing and notarization question this project has been deferring — the
+computer-audio lane on macOS offers a one-click `brew install blackhole-2ch`,
+reusing the installer plumbing already built for whisper.cpp. See T7 in
+`docs/EDITOR-PLAN.md`.
 
 ## Skipped — not the product
 
-**Multi-camera and scene switching.** That is OBS. Showoff is aimed at the
-person who wants one take and no production.
+**Multi-camera and live scene switching.** Switching *while recording* is OBS, and
+Showoff is still not that. But `docs/EDITOR-PLAN.md` does allow several screen or
+webcam lanes in one project, placed after the fact — you record the takes and
+arrange them, rather than cutting live.
 
 **Team sync / shared library.** Requires a backend, auth, and a billing story.
 Showoff is local-first on purpose; the whole knowledgebase is a file on your

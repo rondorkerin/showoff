@@ -53,13 +53,17 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.name }}
-          # Only the things a person downloads. The unpacked app directories
-          # are build scratch and would add a gigabyte for nothing.
+          # The installers, plus the metadata electron-updater reads off the
+          # release to notice a new version. Without latest-mac.yml and
+          # latest.yml every update check fails quietly. The unpacked app
+          # directories are build scratch and would add a gigabyte for nothing.
           path: |
             release/*.dmg
             release/*.zip
             release/*.exe
             release/*.AppImage
+            release/*.blockmap
+            release/latest*.yml
           if-no-files-found: error
 
   publish:

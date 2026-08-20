@@ -25,8 +25,8 @@ Grab the latest build from **[Releases](https://github.com/rondorkerin/showoff/r
 | --- | --- |
 | macOS (Apple silicon) | `Showoff-x.y.z-arm64.dmg` |
 | macOS (Intel) | `Showoff-x.y.z-x64.dmg` |
-| Windows (installer) | `Showoff-x.y.z-x64.exe` |
-| Windows (portable) | `Showoff-x.y.z-x64.exe` (portable) |
+| Windows (installer) | `Showoff-x.y.z-x64-setup.exe` |
+| Windows (portable) | `Showoff-x.y.z-x64-portable.exe` |
 
 ### The builds are unsigned
 

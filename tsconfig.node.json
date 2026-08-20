@@ -8,6 +8,7 @@
     "types": ["node", "electron-vite/node"],
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "esModuleInterop": true,

@@ -3,9 +3,9 @@ import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { vector } from '@electric-sql/pglite-pgvector'
-import { MIGRATIONS } from './migrations'
-import { DbMigrationError } from '@shared/errors'
-import { log } from './../log'
+import { MIGRATIONS } from './migrations.ts'
+import { DbMigrationError } from '../../shared/errors.ts'
+import { log } from './../log.ts'
 
 let db: PGlite | null = null
 let ready: Promise<PGlite> | null = null

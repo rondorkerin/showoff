@@ -1,10 +1,10 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AppSettings } from '@shared/types'
-import { PLATFORM_IDS } from '@shared/platforms'
-import { DEFAULT_CLIP_PLAN_PROMPT, DEFAULT_NOTES_PROMPT, DEFAULT_QUESTIONS_PROMPT } from './prompts'
-import { log } from './log'
+import type { AppSettings } from '../shared/types.ts'
+import { PLATFORM_IDS } from '../shared/platforms.ts'
+import { DEFAULT_CLIP_PLAN_PROMPT, DEFAULT_NOTES_PROMPT, DEFAULT_QUESTIONS_PROMPT } from './prompts.ts'
+import { log } from './log.ts'
 
 let cached: AppSettings | null = null
 

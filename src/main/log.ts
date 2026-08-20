@@ -1,33 +1,52 @@
-import { app } from 'electron'
 import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 type Level = 'debug' | 'info' | 'warn' | 'error'
 
 let stream: WriteStream | null = null
+let attempted = false
 let logPath = ''
 
-function ensureStream(): WriteStream | null {
-  if (stream) return stream
+/**
+ * Resolved lazily and defensively: the media and provider modules are plain
+ * Node so they can be tested outside Electron, and logging must not be the
+ * thing that makes them un-importable.
+ */
+function logDir(): string {
   try {
-    const dir = join(app.getPath('userData'), 'logs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const electron = require('electron') as { app?: { getPath(n: string): string } }
+    if (electron?.app?.getPath) return join(electron.app.getPath('userData'), 'logs')
+  } catch {
+    // not running inside Electron
+  }
+  return join(tmpdir(), 'showoff-logs')
+}
+
+function ensureStream(): WriteStream | null {
+  if (attempted) return stream
+  attempted = true
+  try {
+    const dir = logDir()
     mkdirSync(dir, { recursive: true })
     logPath = join(dir, 'showoff.jsonl')
     stream = createWriteStream(logPath, { flags: 'a' })
   } catch {
-    // Logging must never be the reason the app dies. Fall back to console only.
     stream = null
   }
   return stream
 }
 
+const QUIET = process.env.SHOWOFF_QUIET === '1'
+
 function write(level: Level, stage: string, message: string, fields: Record<string, unknown>): void {
   const entry = { ts: new Date().toISOString(), level, stage, message, ...fields }
-  const line = JSON.stringify(entry)
   const s = ensureStream()
-  if (s) s.write(line + '\n')
-  const consoleFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-  consoleFn(`[${stage}] ${message}`, Object.keys(fields).length ? fields : '')
+  if (s) s.write(JSON.stringify(entry) + '\n')
+  if (QUIET && level !== 'error') return
+  const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
+  fn(`[${stage}] ${message}`, Object.keys(fields).length ? fields : '')
 }
 
 export const log = {

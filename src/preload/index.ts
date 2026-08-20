@@ -109,7 +109,9 @@ const api = {
   },
   audio: {
     loopback: () => call<LoopbackStatus>('audio:loopback'),
-    installLoopback: () => call<JobEvent>('audio:installLoopback')
+    installLoopback: () => call<JobEvent>('audio:installLoopback'),
+    // Resolves false when this session has no sidecar track to start.
+    beginCapture: (recordingId: string) => call<boolean>('audio:beginCapture', recordingId)
   },
   lanes: {
     list: (recordingId: string) => call<Lane[]>('lanes:list', recordingId),

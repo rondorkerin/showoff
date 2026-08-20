@@ -180,8 +180,12 @@ export interface Job {
 export interface LoopbackStatus {
   /** Whether computer audio can be captured right now. */
   available: boolean
-  /** 'native' needs nothing installed; 'device' needs a virtual audio device. */
-  route: 'native' | 'device' | 'none'
+  /**
+   * 'native' is Electron's own loopback (Windows). 'sidecar' is our
+   * ScreenCaptureKit helper (macOS 13+), which needs nothing installed.
+   * 'device' is a virtual audio device the user has to set up themselves.
+   */
+  route: 'native' | 'sidecar' | 'device' | 'none'
   detail: string
   remedy: string
   /** What a device label has to look like for the renderer to pick it. */

@@ -24,6 +24,11 @@ npmRebuild: false
 
 mac:
   category: public.app-category.productivity
+  # The ScreenCaptureKit audio helper. It has to be a real file on disk that can
+  # be exec'd, so it sits beside app.asar rather than inside it.
+  extraResources:
+    - from: resources/audiocap
+      to: audiocap
   target:
     - target: dmg
       arch: [arm64, x64]

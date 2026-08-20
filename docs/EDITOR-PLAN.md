@@ -117,7 +117,7 @@ for everything. Each row below describes **what the user sees**, not backend sta
 | **Lane list** | Skeleton rows at real lane count, no spinner | 1 lane = still a list, not a special case | Lane bar turns red-outlined with the reason inline | Bars drawn at offsets | A lane still finalizing shows a striped bar + "writing…" |
 | **Webcam lane** | — | No webcam recorded → lane absent, `+ Add source` offers it | Camera file unreadable → lane greyed, hover explains | Draggable overlay with amber outline | Trimmed shorter than screen → bar visibly shorter; canvas shows screen only outside it |
 | **Mic / voice-over lane** | Waveform greys in as ffmpeg reads peaks | Silent take → flat line + "no speech detected in this lane" | — | Waveform + fader | Voice-over covering part of the take → mic ducks only under it, visible as a dip |
-| **Computer audio lane** | — | macOS without a device → lane present, greyed, primary "Install audio device" | brew install failed → the actual brew stderr, plus "run `brew install blackhole-2ch` yourself" | Waveform + fader | Windows: works immediately, no state |
+| **Computer audio lane** | — | macOS 12 or no helper → lane present, greyed, primary "Install audio device" | screen recording denied → "Allow it under Privacy & Security"; brew install failed → the actual brew stderr | Waveform + fader | macOS 13+ and Windows: works immediately, no state |
 | **Export** | Per-stage name + real percentage ("Composing 6 lanes · 41%") — never an indeterminate spinner | — | ffmpeg stderr tail + "Show files" so nothing is lost | Save dialog opens at the finished file; toast with Reveal | Cancel mid-export leaves the partial file and says so |
 | **Add source** | Countdown, then the recording HUD | — | Permission denied → the existing per-permission copy | New lane appears at the playhead, selected | Recording longer than the project extends the timeline, does not truncate |
 | **Transcribe / Chop / Post** | Existing job banner | Existing empty states | Existing errors | Existing | Unchanged — these already work |
@@ -235,7 +235,7 @@ Accessibility, none of which exists today:
 | Time model | One clip per lane | Lanes carry offset + in/out. No splitting, ripple delete, or undo stack |
 | Voice-over vs mic | **Duck the mic** | `sidechaincompress` drops the mic to ~20% under voice-over speech; faders override. Handles the partial-voice-over case, which "replace" does not |
 | Aspect ratio | **Chooser in the editor** | Webcam x/y is stored **per aspect**, so 9:16 keeps its own framing. This roughly doubles the position fields on a video lane |
-| Computer audio | **Windows now, brew on mac** | Verified: Electron 43 `loopback` is Windows-only (`electron.d.ts:23743`). macOS gets a one-click `brew install blackhole-2ch` reusing the whisper installer |
+| Computer audio | **Native on both** | Electron 43 `loopback` is Windows-only (`electron.d.ts:23743`). macOS 13+ goes through the ScreenCaptureKit helper in `native/audiocap`, the same API OBS 29 moved to; BlackHole stays as the macOS 12 fallback |
 
 ---
 
@@ -261,42 +261,42 @@ Accessibility, none of which exists today:
 Synthesized from the findings above. Each derives from a specific finding.
 P1 blocks ship; P2 lands the same branch; P3 is a follow-up.
 
-- [ ] **T1 (P1, human: ~1d / CC: ~45min)** — db — Replace `tracks` with `lanes`
+- [x] **T1 (P1, human: ~1d / CC: ~45min)** — db — Replace `tracks` with `lanes`
   - Surfaced by: Finding 3 — `getTrack(recordingId, kind) … LIMIT 1` forbids a second screen share
   - Files: `src/main/db/migrations.ts`, `src/main/db/repo.ts`, `src/shared/types.ts`
   - Verify: migrate the existing 4-recording library; every recording still opens and plays
 
-- [ ] **T2 (P1, human: ~4h / CC: ~20min)** — recording — Stop baking the master
+- [x] **T2 (P1, human: ~4h / CC: ~20min)** — recording — Stop baking the master
   - Surfaced by: Finding 5 — mic is muxed into `master.mp4`, so per-lane gain is unrecoverable
   - Files: `src/main/recording.ts`
   - Verify: record with mic on; confirm `screen.mp4` + `mic.m4a` both register as lanes and the master is marked proxy-only
 
-- [ ] **T3 (P1, human: ~2d / CC: ~1.5h)** — render — Compose from lanes
+- [x] **T3 (P1, human: ~2d / CC: ~1.5h)** — render — Compose from lanes
   - Surfaced by: Findings 1, 5 — the voice-over never reaches the output
   - Files: `src/main/media/render.ts`
   - Verify: export a project with mic + voice-over; listen — the voice-over is audible and the mic ducks under it
 
-- [ ] **T4 (P1, human: ~3h / CC: ~20min)** — ipc — Export mp4 to a save dialog
+- [x] **T4 (P1, human: ~3h / CC: ~20min)** — ipc — Export mp4 to a save dialog
   - Surfaced by: Finding 2 — there is no way to get your video out
   - Files: `src/main/ipc/index.ts`, `src/preload/index.ts`
   - Verify: record, export, open the file in QuickTime
 
-- [ ] **T5 (P1, human: ~3d / CC: ~2h)** — renderer — The editor screen
+- [x] **T5 (P1, human: ~3d / CC: ~2h)** — renderer — The editor screen
   - Surfaced by: Passes 1, 2, 6 — no IA, no states, no keyboard
   - Files: `src/renderer/src/views/Editor.tsx`, `src/renderer/src/components/Lane.tsx`
   - Verify: drag the webcam, trim a lane, mute a lane, export — all by hand in the packaged app
 
-- [ ] **T6 (P2, human: ~1d / CC: ~40min)** — recording — Add a source to an existing project
+- [x] **T6 (P2, human: ~1d / CC: ~40min)** — recording — Add a source to an existing project
   - Surfaced by: the lane model — "keep adding more screenshares"
   - Files: `src/main/recording.ts`, `src/renderer/src/views/Studio.tsx`
   - Verify: record a second screen share into an existing project; it lands as a lane at the playhead
 
-- [ ] **T7 (P2, human: ~1d / CC: ~40min)** — capture — Computer audio
+- [x] **T7 (P2, human: ~1d / CC: ~40min)** — capture — Computer audio
   - Surfaced by: the source list; verified Windows-only in `electron.d.ts:23743`
   - Files: `src/renderer/src/lib/recorder.ts`, `src/main/index.ts`, `src/main/transcribe/install.ts`
   - Verify: on Windows, play music and record — it is in the export. On macOS, click Install audio device and confirm the lane goes live
 
-- [ ] **T8 (P2, human: ~2h / CC: ~10min)** — renderer — Demote transcribe / chop / notes
+- [x] **T8 (P2, human: ~2h / CC: ~10min)** — renderer — Demote transcribe / chop / notes
   - Surfaced by: Finding 4 — optional work sits on the critical path
   - Files: `src/renderer/src/views/RecordingDetail.tsx`
   - Verify: with no API key and no whisper installed, record → export succeeds end to end

@@ -106,9 +106,12 @@ export interface StartOptions {
  * is thrown away immediately -- we already have the screen from the picker the
  * user chose in our own UI, and decoding it twice would be pure waste.
  *
- * macOS has no equivalent, so it goes through whatever virtual audio device is
- * installed. `pattern` comes from the main process rather than being hardcoded
- * here, so adding support for another device is a one-line change over there.
+ * macOS does not go through here at all when the ScreenCaptureKit sidecar is
+ * available -- the main process captures that itself, because Chromium gives
+ * the renderer no way to reach the system mix. This is the fallback for macOS
+ * 12 and for anyone who already routes audio through a virtual device.
+ * `pattern` comes from the main process rather than being hardcoded here, so
+ * adding support for another device is a one-line change over there.
  */
 async function systemAudioStream(pattern: string): Promise<MediaStream> {
   if (navigator.userAgent.includes('Windows')) {
@@ -224,7 +227,17 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
   }, [])
 
   const beginTracks = useCallback(
-    async (recordingId: string, opts: StartOptions, streams: Partial<Record<LaneKind, MediaStream>>) => {
+    async (
+      recordingId: string,
+      opts: StartOptions,
+      streams: Partial<Record<LaneKind, MediaStream>>,
+      systemViaSidecar: boolean
+    ) => {
+      // Started before the recorders rather than alongside them: the sidecar
+      // takes a moment to open its stream, and paying that cost up front keeps
+      // computer audio lined up with the picture instead of trailing it.
+      if (systemViaSidecar) await must(api.audio.beginCapture(recordingId))
+
       const made: TrackRig[] = []
       for (const [kind, stream] of Object.entries(streams) as Array<[LaneKind, MediaStream]>) {
         const isVideo = stream.getVideoTracks().length > 0
@@ -289,13 +302,17 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
             }
           })
         }
+        let systemViaSidecar = false
         if (opts.system) {
           const status = await soft(api.audio.loopback(), null)
-          streams.system = await systemAudioStream(
-            status?.devicePattern ?? 'blackhole|loopback|virtual audio'
-          )
+          if (status?.route === 'sidecar') systemViaSidecar = true
+          else {
+            streams.system = await systemAudioStream(
+              status?.devicePattern ?? 'blackhole|loopback|virtual audio'
+            )
+          }
         }
-        if (!streams.screen && !streams.webcam && !streams.system) {
+        if (!streams.screen && !streams.webcam && !streams.system && !systemViaSidecar) {
           throw new Error('Pick a screen, a window, or your webcam before recording.')
         }
 
@@ -309,7 +326,12 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
           meter()
         }
 
-        const kinds = Object.keys(streams) as LaneKind[]
+        // 'system' is listed even with no stream behind it, so the main process
+        // knows to open a sidecar track for it.
+        const kinds = [
+          ...(Object.keys(streams) as LaneKind[]),
+          ...(systemViaSidecar ? (['system'] as LaneKind[]) : [])
+        ]
         attaching.current = opts.attachTo ?? null
         const recordingId = opts.attachTo
           ? (await must(api.recording.addSource(opts.attachTo, kinds)), opts.attachTo)
@@ -340,7 +362,7 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
             await new Promise((r) => setTimeout(r, 1000))
           }
         }
-        await beginTracks(recordingId, opts, streams)
+        await beginTracks(recordingId, opts, streams, systemViaSidecar)
       } catch (e) {
         Object.values(streams).forEach((s) => s.getTracks().forEach((t) => t.stop()))
         teardown()

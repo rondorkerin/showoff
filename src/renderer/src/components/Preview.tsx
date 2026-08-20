@@ -121,11 +121,24 @@ export default function Preview({
     drag && drag.laneId === lane.id ? drag.now : frameFor(lane, aspect)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
+    <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-3">
+      {/* The canvas is sized from the height it is given and clamped by the
+          width, so a 9:16 frame fits a wide window and a 16:9 frame fits a tall
+          one. That needs a parent with a resolved height, which is what the
+          stretch on this wrapper and on the editor's column is for -- driving
+          it from `height: 100%` inside a shrink-to-fit box collapses it. */}
+      <div className="flex min-h-0 w-full flex-1 items-center justify-center">
       <div
         ref={box}
-        className="relative max-h-full overflow-hidden rounded-[10px] border border-[#262a31] bg-black"
-        style={{ aspectRatio: String(ratio), width: ratio >= 1 ? '100%' : 'auto', height: ratio >= 1 ? 'auto' : '100%' }}
+        data-canvas={aspect}
+        className="relative overflow-hidden rounded-[10px] border border-[#262a31] bg-black"
+        style={{
+          aspectRatio: String(ratio),
+          height: '100%',
+          width: 'auto',
+          maxWidth: '100%',
+          maxHeight: '100%'
+        }}
         onPointerMove={moveDrag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -172,6 +185,7 @@ export default function Preview({
             </div>
           )
         })}
+        </div>
       </div>
 
       {audioLanes.map((lane) => (

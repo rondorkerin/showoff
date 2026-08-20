@@ -2,7 +2,8 @@ import { app } from 'electron'
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
 import * as repo from './db/repo.ts'
-import { posterFrame, probe, probeWithDecode, remuxToMp4 } from './media/render.ts'
+import { pcmToM4a, posterFrame, probe, probeWithDecode, remuxToMp4 } from './media/render.ts'
+import { abortCapture, captureFormat, sidecarSupported, startCapture, stopCapture } from './audio/capture.ts'
 import { getSettings } from './settings.ts'
 import { EmptyRecordingError, NotFoundError } from '../shared/errors.ts'
 import { DEFAULT_FRAME, FULL_FRAME, isVideoLane, type LaneKind } from '../shared/types.ts'
@@ -15,10 +16,25 @@ interface OpenTrack {
   bytes: number
 }
 
+/**
+ * Computer audio on macOS does not arrive as MediaRecorder chunks like every
+ * other track -- it comes from the ScreenCaptureKit sidecar as raw PCM, written
+ * by the main process rather than pushed from the renderer. It is tracked
+ * separately because it has no .webm to remux and no chunks to count.
+ */
+interface PcmTrack {
+  kind: LaneKind
+  partPath: string
+  bytes: number
+  /** How far behind the picture the first sample landed. */
+  offsetMs: number
+}
+
 interface Session {
   recordingId: string
   dir: string
   tracks: Map<LaneKind, OpenTrack>
+  pcm: PcmTrack | null
   startedAt: number
 }
 
@@ -47,7 +63,12 @@ export async function startRecording(input: {
   })
 
   const tracks = new Map<LaneKind, OpenTrack>()
+  let pcm: PcmTrack | null = null
   for (const kind of input.kinds) {
+    if (kind === 'system' && sidecarSupported()) {
+      pcm = { kind, partPath: join(dir, 'system.pcm.part'), bytes: 0, offsetMs: 0 }
+      continue
+    }
     // .part while writing: an interrupted recording is visibly incomplete
     // rather than a truncated file that looks whole.
     const partPath = join(dir, `${kind}.webm.part`)
@@ -59,9 +80,23 @@ export async function startRecording(input: {
     })
   }
 
-  sessions.set(rec.id, { recordingId: rec.id, dir, tracks, startedAt: Date.now() })
+  sessions.set(rec.id, { recordingId: rec.id, dir, tracks, pcm, startedAt: Date.now() })
   log.info('recording', 'started', { recordingId: rec.id, dir, kinds: input.kinds })
   return { recordingId: rec.id, dir }
+}
+
+/**
+ * Starts the macOS audio sidecar, if this session has one.
+ *
+ * Deliberately separate from startRecording: the renderer calls it at the
+ * instant it starts its own recorders, after any countdown, so the two do not
+ * drift apart by however long the user chose to count in.
+ */
+export async function beginSystemCapture(recordingId: string): Promise<boolean> {
+  const session = sessions.get(recordingId)
+  if (!session?.pcm) return false
+  await startCapture(recordingId, session.pcm.partPath)
+  return true
 }
 
 /**
@@ -85,6 +120,8 @@ async function closeStream(track: OpenTrack): Promise<void> {
 export async function cancelRecording(recordingId: string): Promise<void> {
   const session = sessions.get(recordingId)
   if (!session) return
+  await abortCapture(recordingId)
+  if (session.pcm) await cleanupFiles([session.pcm.partPath])
   for (const t of session.tracks.values()) {
     await closeStream(t)
     try {
@@ -114,13 +151,18 @@ export async function finalizeRecording(
   if (!session) throw NotFoundError('Recording session')
 
   onProgress('Closing files', 0.05)
+  if (session.pcm) {
+    const result = await stopCapture(recordingId)
+    session.pcm.bytes = result.bytes
+    session.pcm.offsetMs = result.offsetMs
+  }
   for (const t of session.tracks.values()) await closeStream(t)
 
   const written = [...session.tracks.values()]
-  const totalBytes = written.reduce((n, t) => n + t.bytes, 0)
+  const totalBytes = written.reduce((n, t) => n + t.bytes, 0) + (session.pcm?.bytes ?? 0)
   if (totalBytes === 0) {
     sessions.delete(recordingId)
-    await cleanupFiles(written.map((t) => t.partPath))
+    await cleanupFiles([...written.map((t) => t.partPath), ...(session.pcm ? [session.pcm.partPath] : [])])
     await repo.deleteRecording(recordingId)
     throw EmptyRecordingError('no chunks were written')
   }
@@ -139,6 +181,14 @@ export async function finalizeRecording(
     const finalPath = t.partPath.replace(/\.part$/, '')
     renameSync(t.partPath, finalPath)
     finished.set(t.kind, finalPath)
+  }
+  const systemOffsetMs = session.pcm?.offsetMs ?? 0
+  let systemPcm: string | null = null
+  if (session.pcm && session.pcm.bytes > 0) {
+    systemPcm = session.pcm.partPath.replace(/\.part$/, '')
+    renameSync(session.pcm.partPath, systemPcm)
+  } else if (session.pcm) {
+    await cleanupFiles([session.pcm.partPath])
   }
   sessions.delete(recordingId)
 
@@ -176,6 +226,16 @@ export async function finalizeRecording(
   if (camWebm) await convert('webcam', camWebm, 'webcam.mp4', 'Converting webcam', 0.5)
   if (micWebm) await convert('mic', micWebm, 'mic.m4a', 'Converting microphone', 0.7)
   if (sysWebm) await convert('system', sysWebm, 'system.m4a', 'Converting computer audio', 0.8)
+  else if (systemPcm) {
+    onProgress('Converting computer audio', 0.8)
+    const out = join(session.dir, 'system.m4a')
+    const info = await pcmToM4a(systemPcm, out, captureFormat())
+    // Raw f32 is ~11 MB a minute. The .webm intermediates are kept as a safety
+    // net because they are the only copy of a compressed stream; this one is
+    // pure bulk that the m4a beside it already contains.
+    await cleanupFiles([systemPcm])
+    made.push({ kind: 'system', path: out, info })
+  }
 
   const primary = made.find((m) => m.kind === 'screen') ?? made.find((m) => m.kind === 'webcam')!
   const durationMs = made.reduce((n, m) => Math.max(n, m.info.durationMs), 0)
@@ -202,6 +262,7 @@ export async function finalizeRecording(
       kind: m.kind,
       path: m.path,
       sourceMs: m.info.durationMs || durationMs,
+      offsetMs: m.kind === 'system' ? systemOffsetMs : 0,
       z: isPip ? 10 : 0,
       frame: isVideoLane(m.kind) ? (isPip ? DEFAULT_FRAME : FULL_FRAME) : undefined
     })
@@ -251,12 +312,17 @@ export async function startAddSource(
 
   const existing = await repo.listLanes(recordingId)
   const tracks = new Map<LaneKind, OpenTrack>()
+  let pcm: PcmTrack | null = null
   for (const kind of kinds) {
     const n = existing.filter((l) => l.kind === kind).length + 1
+    if (kind === 'system' && sidecarSupported()) {
+      pcm = { kind, partPath: join(rec.dir, `system-${n}.pcm.part`), bytes: 0, offsetMs: 0 }
+      continue
+    }
     const partPath = join(rec.dir, `${kind}-${n}.webm.part`)
     tracks.set(kind, { kind, partPath, stream: createWriteStream(partPath), bytes: 0 })
   }
-  sessions.set(recordingId, { recordingId, dir: rec.dir, tracks, startedAt: Date.now() })
+  sessions.set(recordingId, { recordingId, dir: rec.dir, tracks, pcm, startedAt: Date.now() })
   log.info('recording', 'adding sources', { recordingId, kinds })
   return { dir: rec.dir }
 }
@@ -269,11 +335,18 @@ export async function finalizeAddSource(
   if (!session) throw NotFoundError('Recording session')
 
   onProgress('Closing files', 0.05)
+  if (session.pcm) {
+    const result = await stopCapture(recordingId)
+    session.pcm.bytes = result.bytes
+    session.pcm.offsetMs = result.offsetMs
+  }
   for (const t of session.tracks.values()) await closeStream(t)
   const written = [...session.tracks.values()].filter((t) => t.bytes > 0)
+  const addedPcm = session.pcm && session.pcm.bytes > 0 ? session.pcm : null
+  if (session.pcm && !addedPcm) await cleanupFiles([session.pcm.partPath])
   sessions.delete(recordingId)
 
-  if (written.length === 0) {
+  if (written.length === 0 && !addedPcm) {
     await cleanupFiles([...session.tracks.values()].map((t) => t.partPath))
     throw EmptyRecordingError('the added source captured nothing')
   }
@@ -306,6 +379,24 @@ export async function finalizeAddSource(
     added++
   }
 
+  if (addedPcm) {
+    const pcmPath = addedPcm.partPath.replace(/\.part$/, '')
+    renameSync(addedPcm.partPath, pcmPath)
+    onProgress('Converting computer audio', 0.95)
+    const out = pcmPath.replace(/\.pcm$/, '.m4a')
+    const info = await pcmToM4a(pcmPath, out, captureFormat())
+    await cleanupFiles([pcmPath])
+    await repo.addLane({
+      recordingId,
+      kind: 'system',
+      path: out,
+      sourceMs: info.durationMs,
+      offsetMs: addedPcm.offsetMs,
+      z: 0
+    })
+    added++
+  }
+
   log.info('recording', 'sources added', { recordingId, added })
   return { added }
 }
@@ -319,6 +410,7 @@ export async function startVoiceover(recordingId: string): Promise<{ dir: string
     recordingId,
     dir: rec.dir,
     startedAt: Date.now(),
+    pcm: null,
     tracks: new Map([
       ['voiceover', { kind: 'voiceover', partPath, stream: createWriteStream(partPath), bytes: 0 }]
     ])

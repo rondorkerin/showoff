@@ -146,18 +146,20 @@ export default function Voiceover({
 
   if (phase === 'idle') {
     return (
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="ghost" onClick={() => void start()}>
-          {hasVoiceover ? 'Re-record voice-over' : 'Record voice-over'}
-        </Button>
-        {hasVoiceover && (
-          <Button size="sm" variant="ghost" onClick={() => void remove()}>
-            Remove
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => void start()}>
+            {hasVoiceover ? 'Re-record voice-over' : 'Record voice-over'}
           </Button>
-        )}
-        <span className="text-[11px] text-[#6b727d]">
+          {hasVoiceover && (
+            <Button size="sm" variant="ghost" onClick={() => void remove()}>
+              Remove
+            </Button>
+          )}
+        </div>
+        <span className="text-[11px] leading-relaxed text-[#6b727d]">
           {hasVoiceover
-            ? 'A voice-over is attached. Re-transcribe to use it.'
+            ? 'The voice-over is a lane like any other — play it, level it, move it, or duck the original under it.'
             : 'Narrate over the footage instead of your live audio.'}
         </span>
       </div>

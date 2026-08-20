@@ -43,6 +43,42 @@ export async function remuxToMp4(input: string, output: string): Promise<MediaIn
   return probe(output)
 }
 
+/**
+ * Raw PCM from the macOS audio sidecar into an m4a lane.
+ *
+ * The helper writes headerless samples, so the format has to be handed to
+ * ffmpeg on the input side -- get this wrong and you get a file that plays at
+ * the wrong speed rather than an error.
+ */
+export async function pcmToM4a(
+  input: string,
+  output: string,
+  opts: { sampleRate: number; channels: number; format: string }
+): Promise<MediaInfo> {
+  mkdirSync(dirname(output), { recursive: true })
+  await runFfmpeg(
+    [
+      '-f',
+      opts.format,
+      '-ar',
+      String(opts.sampleRate),
+      '-ac',
+      String(opts.channels),
+      '-i',
+      input,
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-movflags',
+      '+faststart',
+      output
+    ],
+    { label: 'pcm-to-m4a' }
+  )
+  return probe(output)
+}
+
 /** 16 kHz mono wav is what every Whisper implementation wants. */
 export async function extractAudioWav(input: string, output: string): Promise<string> {
   mkdirSync(dirname(output), { recursive: true })

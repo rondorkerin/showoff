@@ -399,7 +399,7 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
               disabled={!loopback?.available}
               className="mt-2"
             />
-            {loopback && !loopback.available && (
+            {loopback && (!loopback.available || (loopback.route === 'sidecar' && system)) && (
               <p className="mt-1.5 pl-[40px] text-[11px] leading-relaxed text-[#6b727d]">
                 {loopback.detail}{' '}
                 {loopback.installable ? (

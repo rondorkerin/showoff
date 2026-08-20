@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { log } from '../log.ts'
+import { sidecarSupported } from './capture.ts'
 import type { LoopbackStatus } from '../../shared/types.ts'
 
 export type { LoopbackStatus }
@@ -10,10 +11,14 @@ export type { LoopbackStatus }
  *
  * Electron can do this on its own on Windows: `setDisplayMediaRequestHandler`
  * accepts `audio: 'loopback'`, and the docs are explicit that the option is
- * "currently only supported on Windows" (electron.d.ts). macOS has no such
- * hook, so the honest answer there is a virtual audio device -- the same route
- * every screen recorder on the platform takes -- and the least painful way to
- * get one is the cask that ships it.
+ * "currently only supported on Windows" (electron.d.ts).
+ *
+ * macOS has no such hook in Chromium, but the OS does expose the system mix
+ * through ScreenCaptureKit -- which is how OBS stopped needing a virtual audio
+ * device in version 29. We reach it the same way, through a small Swift helper
+ * (see audio/capture.ts). A virtual device stays as the fallback for macOS 12
+ * and for anyone who already has one wired up, since it also captures from apps
+ * on a second display and survives a denied screen-recording prompt.
  */
 export const DEVICE_PATTERN = 'blackhole|loopback|soundflower|virtual audio|vb-audio|voicemeeter'
 
@@ -40,6 +45,19 @@ export function loopbackStatus(): LoopbackStatus {
   }
   if (process.platform === 'darwin') {
     const installed = blackholeInstalled()
+    if (sidecarSupported()) {
+      return {
+        available: true,
+        route: 'sidecar',
+        detail: installed
+          ? 'Captured directly from macOS, the same way OBS does it. Your BlackHole device still works if you would rather route audio yourself.'
+          : 'Captured directly from macOS, the same way OBS does it. Nothing to install -- it uses the screen recording permission you have already granted.',
+        remedy: '',
+        devicePattern: DEVICE_PATTERN,
+        installable: false
+      }
+    }
+
     return {
       available: installed,
       route: installed ? 'device' : 'none',

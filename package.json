@@ -12,13 +12,14 @@
   },
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "node scripts/build-audiocap.mjs && electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "start": "electron-vite preview",
-    "pack:mac": "electron-vite build && electron-builder --mac --publish never",
+    "pack:mac": "npm run build && electron-builder --mac --publish never",
     "pack:win": "electron-vite build && electron-builder --win --publish never",
-    "release": "electron-vite build && electron-builder --mac --win --publish always",
-    "test": "node --test \"test/**/*.test.mjs\""
+    "release": "npm run build && electron-builder --mac --win --publish always",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "build:audiocap": "node scripts/build-audiocap.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.5",

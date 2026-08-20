@@ -153,6 +153,9 @@ export function registerIpc(): void {
   handle('source:cancel', (recordingId: string) => recording.cancelVoiceover(recordingId))
 
   handle('audio:loopback', () => loopbackStatus())
+  // Started separately from recording:start so the sidecar and the renderer's
+  // own recorders begin at the same moment, not either side of a countdown.
+  handle('audio:beginCapture', (recordingId: string) => recording.beginSystemCapture(recordingId))
   handle('audio:installLoopback', () =>
     enqueue('loopback', null, (onProgress) =>
       installLoopback((f, note) => onProgress(note, f))

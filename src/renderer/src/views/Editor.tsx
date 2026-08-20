@@ -284,7 +284,7 @@ export default function Editor({ shell, id }: { shell: Shell; id: string }): Rea
 
       <div className="grid min-h-0 flex-1 grid-cols-[1fr_320px]">
         <div className="flex min-h-0 flex-col">
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <div className="flex min-h-0 flex-1 items-stretch justify-center p-6">
             <Preview
               lanes={lanes}
               aspect={aspect}

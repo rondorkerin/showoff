@@ -18,15 +18,21 @@ and edge-trim. Still deferred inside that plan: splitting a clip, ripple delete,
 and an undo stack — those are what make it an NLE, and lanes being free means you
 never need them.
 
-**~~System audio capture.~~** *Reversed 2026-08-20, with the platform split
-intact.* Verified against Electron 43.4.1: `Streams.audio: 'loopback'` is
-documented as "currently only supported on Windows" (`electron.d.ts:23743`), so
-Windows is close to free. macOS still has no supported path in Electron itself,
-and rather than bundle a ScreenCaptureKit native addon — which would force the
-code-signing and notarization question this project has been deferring — the
-computer-audio lane on macOS offers a one-click `brew install blackhole-2ch`,
-reusing the installer plumbing already built for whisper.cpp. See T7 in
-`docs/EDITOR-PLAN.md`.
+**~~System audio capture.~~** *Shipped 2026-08-20, natively on both platforms.*
+Electron 43.4.1 documents `Streams.audio: 'loopback'` as "currently only
+supported on Windows" (`electron.d.ts:23743`), so Windows was close to free.
+macOS has no path through Chromium at all — but it does through
+ScreenCaptureKit, which is how OBS 29 stopped requiring a virtual audio device.
+`native/audiocap/AudioCap.swift` is a ~200-line helper that runs an `SCStream`
+with `capturesAudio` and writes 48 kHz stereo f32 to stdout; the main process
+pipes it to disk and ffmpeg turns it into a lane at finalize. It rides on the
+screen-recording permission the app already asks for, so there is nothing to
+install. BlackHole via `brew install blackhole-2ch` remains the fallback for
+macOS 12 and for anyone who prefers to route audio themselves.
+
+The code-signing question this deferred is still deferred — the helper is
+unsigned along with the rest of the app, and inherits its TCC attribution from
+the parent bundle. Notarization will need to cover it when that day comes.
 
 ## Skipped — not the product
 

@@ -19,6 +19,28 @@ interface Queued {
 const queue: Queued[] = []
 let running = false
 
+/**
+ * Which recordings have work in flight, queued or running.
+ *
+ * Deleting a recording out from under its own finalize job is the fastest way
+ * to turn one confusing moment into three error toasts: the job fails on a
+ * missing folder, the transcribe that was chained behind it fails on a missing
+ * row, and none of it says the real cause. Anything destructive asks here
+ * first.
+ */
+const busy = new Map<string, number>()
+
+export function isBusy(recordingId: string): boolean {
+  return (busy.get(recordingId) ?? 0) > 0
+}
+
+function mark(recordingId: string | null, delta: number): void {
+  if (!recordingId) return
+  const next = (busy.get(recordingId) ?? 0) + delta
+  if (next > 0) busy.set(recordingId, next)
+  else busy.delete(recordingId)
+}
+
 function broadcast(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send(channel, payload)
@@ -38,7 +60,18 @@ export async function enqueue(
   recordingId: string | null,
   task: Task
 ): Promise<JobHandle> {
-  const job = await repo.createJob(recordingId, kind)
+  // Marked before the job row is written, not after. Writing that row is an
+  // await, and a delete arriving inside that window would look at a recording
+  // nothing had claimed yet -- which is precisely how a recording gets deleted
+  // out from under the job that is about to touch it.
+  mark(recordingId, 1)
+  let job: { id: string }
+  try {
+    job = await repo.createJob(recordingId, kind)
+  } catch (e) {
+    mark(recordingId, -1)
+    throw e
+  }
   const handle: JobHandle = { id: job.id, kind, recordingId }
   queue.push({ handle, task })
   broadcast('job:queued', handle)
@@ -93,6 +126,8 @@ async function run({ handle, task }: Queued): Promise<void> {
       message: err.message,
       detail: err.detail.slice(0, 1000)
     })
+  } finally {
+    mark(handle.recordingId, -1)
   }
 }
 

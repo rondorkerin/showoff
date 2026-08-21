@@ -21,14 +21,85 @@ export default function Library({ shell }: { shell: Shell }): React.ReactElement
   const [pContext, setPContext] = useState('')
   const [interrupted, setInterrupted] = useState<Interrupted[]>([])
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [anchor, setAnchor] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
-    setRecordings(await soft(api.recordings.list(projectId), []))
     setStats(await soft(api.stats(), { recordings: 0, clips: 0, minutes: 0 }))
+    // Interrupted first: listing it reaps takes that never wrote a byte, so
+    // asking in this order means the grid never shows a card that is about to
+    // be swept away.
     setInterrupted(await soft(api.recordings.interrupted(), []))
+    const rows = await soft(api.recordings.list(projectId), [])
+    setRecordings(rows)
+    // Anything that has left the library leaves the selection with it, so the
+    // count in the bar always matches cards you can still see.
+    setSelected((prev) => {
+      const live = new Set(rows.filter((r) => prev.has(r.id)).map((r) => r.id))
+      return live.size === prev.size ? prev : live
+    })
     setLoading(false)
   }, [projectId])
+
+  /**
+   * Selection follows the conventions people already have: the checkbox or a
+   * modifier click toggles one, shift extends from the last one touched, and a
+   * plain click still just opens the recording.
+   */
+  const onSelect = useCallback(
+    (rec: Recording, e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => {
+      setSelected((prev) => {
+        const next = new Set(prev)
+        if (e.shiftKey && anchor) {
+          const ids = recordings.map((r) => r.id)
+          const from = ids.indexOf(anchor)
+          const to = ids.indexOf(rec.id)
+          if (from >= 0 && to >= 0) {
+            for (const id of ids.slice(Math.min(from, to), Math.max(from, to) + 1)) next.add(id)
+            return next
+          }
+        }
+        if (next.has(rec.id)) next.delete(rec.id)
+        else next.add(rec.id)
+        return next
+      })
+      setAnchor(rec.id)
+    },
+    [anchor, recordings]
+  )
+
+  const trashSelected = useCallback(async () => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    const first = recordings.find((r) => r.id === ids[0])
+    const ok = await soft(
+      api.menu.confirmTrash({
+        title: first?.title ?? '',
+        dir: first?.dir ?? '',
+        count: ids.length
+      }),
+      false
+    )
+    if (!ok) return
+    const failed: string[] = []
+    for (const id of ids) {
+      const res = await api.recordings.trash(id)
+      if (!res.ok) failed.push(res.error.message)
+    }
+    setSelected(new Set())
+    if (failed.length) toast.push({ tone: 'bad', title: 'Some could not be trashed', body: failed[0] })
+    else toast.ok(`Moved ${ids.length} to Trash`)
+    await load()
+  }, [selected, recordings, load, toast])
+
+  const removeSelected = useCallback(async () => {
+    const ids = [...selected]
+    for (const id of ids) await soft(api.recordings.remove(id), undefined)
+    setSelected(new Set())
+    toast.ok(`Removed ${ids.length} from Library`, 'The files are still on disk.')
+    await load()
+  }, [selected, load, toast])
 
   /**
    * A take whose app went away mid-recording still has every chunk on disk --
@@ -37,8 +108,15 @@ export default function Library({ shell }: { shell: Shell }): React.ReactElement
   const recover = useCallback(
     async (id: string) => {
       try {
+        // The call returns as soon as the job is queued, not when it is done --
+        // so this says what is happening, and the job's own completion is what
+        // refreshes the list.
         await must(api.recordings.recover(id))
-        toast.ok('Recording recovered', 'The footage that was on disk has been stitched together.')
+        toast.push({
+          tone: 'info',
+          title: 'Putting that recording back together',
+          body: 'Stitching what reached disk into a finished take.'
+        })
       } catch (e) {
         toast.fail('Could not recover that recording', e)
       }
@@ -75,20 +153,28 @@ export default function Library({ shell }: { shell: Shell }): React.ReactElement
       }
       if (action === 'rename') return setRenaming(rec.id)
       if (action === 'recover') return recover(rec.id)
+      // Right-clicking inside a selection acts on the selection: singling out
+      // the one card under the pointer is never what someone who just picked
+      // six of them meant.
+      const bulk = selected.size > 1 && selected.has(rec.id)
+
       if (action === 'remove') {
+        if (bulk) return removeSelected()
         await soft(api.recordings.remove(rec.id), undefined)
         toast.ok('Removed from Library', 'The files are still in ' + rec.dir)
         return load()
       }
       if (action === 'trash') {
+        if (bulk) return trashSelected()
         const ok = await soft(api.menu.confirmTrash({ title: rec.title, dir: rec.dir }), false)
         if (!ok) return
-        await soft(api.recordings.trash(rec.id), undefined)
+        const res = await api.recordings.trash(rec.id)
+        if (!res.ok) return toast.fail('Could not move it to the Trash', res.error)
         toast.ok('Moved to Trash')
         return load()
       }
     },
-    [load, recover, shell, toast]
+    [load, recover, removeSelected, selected, shell, toast, trashSelected]
   )
 
   const rename = useCallback(
@@ -258,18 +344,40 @@ export default function Library({ shell }: { shell: Shell }): React.ReactElement
             action={<Button variant="primary" onClick={() => shell.go({ name: 'studio' })}>Open Studio</Button>}
           />
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
-            {recordings.map((r) => (
-              <RecordingCard
-                key={r.id}
-                rec={r}
-                renaming={renaming === r.id}
-                onRename={(title) => void rename(r.id, title)}
-                onMenu={(at) => void onCardMenu(r, at)}
-                onOpen={() => shell.go({ name: 'recording', id: r.id })}
-              />
-            ))}
-          </div>
+          <>
+            {selected.size > 0 && (
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-[10px] border border-[#3a4048] bg-[#16181d] px-4 py-2.5">
+                <span className="text-[12.5px] font-medium">
+                  {selected.size} selected
+                </span>
+                <span className="flex-1" />
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => void removeSelected()}>
+                  Remove from Library
+                </Button>
+                <Button size="sm" variant="danger" onClick={() => void trashSelected()}>
+                  Move to Trash
+                </Button>
+              </div>
+            )}
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
+              {recordings.map((r) => (
+                <RecordingCard
+                  key={r.id}
+                  rec={r}
+                  renaming={renaming === r.id}
+                  selected={selected.has(r.id)}
+                  picking={selected.size > 0}
+                  onRename={(title) => void rename(r.id, title)}
+                  onMenu={(at) => void onCardMenu(r, at)}
+                  onSelect={(e) => onSelect(r, e)}
+                  onOpen={() => shell.go({ name: 'recording', id: r.id })}
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -313,21 +421,28 @@ export default function Library({ shell }: { shell: Shell }): React.ReactElement
 function RecordingCard({
   rec,
   renaming,
+  selected,
+  picking,
   onOpen,
   onMenu,
+  onSelect,
   onRename
 }: {
   rec: Recording
   renaming: boolean
+  selected: boolean
+  /** Something is already selected, so the checkboxes stay visible. */
+  picking: boolean
   onOpen: () => void
   onMenu: (at: { x: number; y: number }) => void
+  onSelect: (e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void
   onRename: (title: string) => void
 }): React.ReactElement {
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={(e) => (e.metaKey || e.ctrlKey || e.shiftKey ? onSelect(e) : onOpen())}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onOpen()
       }}
@@ -335,8 +450,27 @@ function RecordingCard({
         e.preventDefault()
         onMenu({ x: e.clientX, y: e.clientY })
       }}
-      className="group cursor-pointer overflow-hidden rounded-[10px] border border-[#262a31] bg-[#121418] text-left transition-colors hover:border-[#3a4048]"
+      className={cls(
+        'group relative cursor-pointer overflow-hidden rounded-[10px] border bg-[#121418] text-left transition-colors',
+        selected ? 'border-[#F5A524]' : 'border-[#262a31] hover:border-[#3a4048]'
+      )}
     >
+      <button
+        aria-label={selected ? 'Deselect' : 'Select'}
+        onClick={(e) => {
+          e.stopPropagation()
+          onSelect(e)
+        }}
+        className={cls(
+          'absolute left-2 top-2 z-10 flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border text-[11px] leading-none transition-opacity',
+          selected
+            ? 'border-[#F5A524] bg-[#F5A524] text-black opacity-100'
+            : 'border-[#6b727d] bg-black/60 text-transparent opacity-0 group-hover:opacity-100',
+          picking && 'opacity-100'
+        )}
+      >
+        ✓
+      </button>
       <div className="relative aspect-video bg-black">
         {rec.poster_path ? (
           <img src={api.mediaUrl(rec.poster_path)} alt="" className="h-full w-full object-cover" />

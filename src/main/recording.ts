@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import * as repo from './db/repo.ts'
 import { pcmToM4a, posterFrame, probe, probeWithDecode, remuxToMp4 } from './media/render.ts'
 import { abortCapture, captureFormat, sidecarSupported, startCapture, stopCapture } from './audio/capture.ts'
+import { isBusy } from './jobs/queue.ts'
 import { getSettings } from './settings.ts'
 import { EmptyRecordingError, NotFoundError } from '../shared/errors.ts'
 import {
@@ -361,7 +362,10 @@ export async function listInterrupted(): Promise<Interrupted[]> {
   const rows = await repo.listRecordingsByStatus('recording')
   const out: Interrupted[] = []
   for (const rec of rows) {
-    if (sessions.has(rec.id)) continue
+    // Still capturing, or already being assembled: a take mid-finalize is
+    // 'recording' right up until it is 'ready', and offering to recover it
+    // would race the job that is doing exactly that.
+    if (sessions.has(rec.id) || isBusy(rec.id)) continue
     if (!existsSync(rec.dir)) continue
     let bytes = 0
     const kinds = new Set<LaneKind>()
@@ -374,6 +378,20 @@ export async function listInterrupted(): Promise<Interrupted[]> {
       bytes += size
       kinds.add(kind)
     }
+
+    // A take that never got a byte to disk -- a start that failed before the
+    // recorders ran -- is not something to offer back. It is litter, and
+    // leaving it in the list means an unfinished banner that can never be
+    // resolved by either button.
+    if (bytes === 0) {
+      log.info('recording', 'reaping a take that never wrote anything', {
+        recordingId: rec.id,
+        dir: rec.dir
+      })
+      await trashRecording(rec.id)
+      continue
+    }
+
     out.push({
       recordingId: rec.id,
       title: rec.title,
@@ -456,6 +474,7 @@ export async function trashRecording(recordingId: string): Promise<void> {
   const rec = await repo.getRecording(recordingId)
   if (!rec) return
   if (sessions.has(recordingId)) throw new Error('That recording is still going.')
+  if (isBusy(recordingId)) throw new Error('That recording is still being processed.')
   await repo.deleteRecording(recordingId)
   try {
     if (existsSync(rec.dir)) await shell.trashItem(rec.dir)

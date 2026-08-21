@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect } from 'react'
+import { useToast } from '../components/Toasts.tsx'
 import { useRecorder, type RecorderState } from './recorder.ts'
 
 type Recorder = ReturnType<typeof useRecorder>
@@ -22,6 +23,30 @@ export function RecordingProvider({
   children: React.ReactNode
 }): React.ReactElement {
   const recorder = useRecorder(onFinalized)
+  const toast = useToast()
+  const { error, warning } = recorder.state
+  const { clearError, clearWarning } = recorder
+
+  // Reported from here rather than from Studio, because the whole point of
+  // hoisting the recorder is that you might be three screens away when a track
+  // has something to say.
+  useEffect(() => {
+    if (!error) return
+    toast.push({ tone: 'bad', title: 'Recording problem', body: error })
+    clearError()
+  }, [error, clearError, toast])
+
+  useEffect(() => {
+    if (!warning) return
+    toast.push({
+      tone: 'info',
+      title: 'Recording without computer audio',
+      body: warning,
+      detail: 'Everything else is still being captured.'
+    })
+    clearWarning()
+  }, [warning, clearWarning, toast])
+
   return <Ctx.Provider value={recorder}>{children}</Ctx.Provider>
 }
 

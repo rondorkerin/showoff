@@ -122,13 +122,6 @@ export default function Studio({ shell }: { shell: Shell }): React.ReactElement 
     if (rec.state.phase === 'recording') void loadDevices()
   }, [rec.state.phase, loadDevices])
 
-  useEffect(() => {
-    if (rec.state.error) {
-      toast.push({ tone: 'bad', title: 'Recording problem', body: rec.state.error })
-      rec.clearError()
-    }
-  }, [rec, toast])
-
   const busy = rec.state.phase !== 'idle'
 
   const start = (): void => {

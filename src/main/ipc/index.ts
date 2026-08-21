@@ -16,7 +16,7 @@ import { confirmTrash, recordingMenu } from '../menus.ts'
 import { reconcileLanes } from '../lanes.ts'
 import { exportRecording, suggestedFilename } from '../export.ts'
 import { installLoopback, loopbackStatus } from '../audio/loopback.ts'
-import { enqueue, queueDepth } from '../jobs/queue.ts'
+import { enqueue, isBusy, queueDepth } from '../jobs/queue.ts'
 import { llmStatuses } from '../llm/index.ts'
 import { sttStatuses } from '../transcribe/index.ts'
 import { installWhisper, whisperInstallRoute } from '../transcribe/install.ts'
@@ -177,17 +177,20 @@ export function registerIpc(): void {
 
   handle('recordings:trash', (id: string) => recording.trashRecording(id))
   handle('recordings:interrupted', () => recording.listInterrupted())
-  handle('recordings:recover', (id: string) =>
-    enqueue('finalize', id, (onProgress) =>
+  handle('recordings:recover', (id: string) => {
+    // Checked before the enqueue, not inside the task: the job marks its own
+    // recording busy, so a guard on the inside would refuse every recovery.
+    if (isBusy(id)) throw new Error('That recording is already being processed.')
+    return enqueue('finalize', id, (onProgress) =>
       recording.recoverRecording(id, (stage, f) => onProgress(stage, f))
     )
-  )
+  })
   handle('recordings:discard', (id: string) => recording.discardInterrupted(id))
   handle('menu:recording', (input: { status: string; hasFiles: boolean; x: number; y: number }) =>
     recordingMenu(input)
   )
-  handle('menu:confirmTrash', (input: { title: string; dir: string }) =>
-    confirmTrash(input.title, input.dir)
+  handle('menu:confirmTrash', (input: { title: string; dir: string; count?: number }) =>
+    confirmTrash(input)
   )
 
   handle('recordings:list', (projectId: string | null) => repo.listRecordings(projectId))
@@ -208,7 +211,10 @@ export function registerIpc(): void {
   handle('recordings:update', (p: { id: string; title?: string; projectId?: string | null }) =>
     repo.updateRecording(p.id, p)
   )
-  handle('recordings:delete', (id: string) => repo.deleteRecording(id))
+  handle('recordings:delete', (id: string) => {
+    if (isBusy(id)) throw new Error('That recording is still being processed.')
+    return repo.deleteRecording(id)
+  })
   handle('recordings:tags', (p: { id: string; tags: string[] }) =>
     repo.setRecordingTags(p.id, p.tags)
   )

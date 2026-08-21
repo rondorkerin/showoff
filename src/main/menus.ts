@@ -97,15 +97,25 @@ export function projectMenu(at: MenuAt): Promise<string | null> {
  * agree to a destructive action far more readily when it is reversible, and
  * this one genuinely is.
  */
-export async function confirmTrash(title: string, dir: string): Promise<boolean> {
+export async function confirmTrash(input: {
+  title: string
+  dir: string
+  /** More than one selected: the wording counts them instead of naming one. */
+  count?: number
+}): Promise<boolean> {
+  const many = (input.count ?? 1) > 1
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
   const options = {
     type: 'warning' as const,
     buttons: ['Cancel', 'Move to Trash'],
     defaultId: 1,
     cancelId: 0,
-    message: `Move “${title}” to the Trash?`,
-    detail: `The recording, its lanes and anything rendered from it go to the Trash:\n${dir}\n\nYou can put it back from there.`
+    message: many
+      ? `Move ${input.count} recordings to the Trash?`
+      : `Move “${input.title}” to the Trash?`,
+    detail: many
+      ? 'Their footage, lanes and anything rendered from them go to the Trash. You can put them back from there.'
+      : `The recording, its lanes and anything rendered from it go to the Trash:\n${input.dir}\n\nYou can put it back from there.`
   }
   const res = win
     ? await dialog.showMessageBox(win, options)

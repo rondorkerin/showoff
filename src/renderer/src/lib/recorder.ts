@@ -152,6 +152,8 @@ export interface RecorderState {
   countdown: number
   level: number
   error: string | null
+  /** A track that could not be captured, while the rest of the take goes on. */
+  warning: string | null
   previewScreen: MediaStream | null
   previewWebcam: MediaStream | null
   silentSeconds: number
@@ -165,6 +167,7 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
     countdown: 0,
     level: 0,
     error: null,
+    warning: null,
     previewScreen: null,
     previewWebcam: null,
     silentSeconds: 0
@@ -236,7 +239,19 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
       // Started before the recorders rather than alongside them: the sidecar
       // takes a moment to open its stream, and paying that cost up front keeps
       // computer audio lined up with the picture instead of trailing it.
-      if (systemViaSidecar) await must(api.audio.beginCapture(recordingId))
+      //
+      // A failure here loses one lane, not the take. Computer audio is the one
+      // track macOS can refuse on its own -- a freshly installed copy has no
+      // Screen Recording grant yet -- and throwing away three good tracks over
+      // it is how a recording session becomes an argument with a permissions
+      // pane. The main process needs no telling: with no samples arriving the
+      // system track finalizes to nothing.
+      if (systemViaSidecar) {
+        const res = await api.audio.beginCapture(recordingId)
+        if (!res.ok) {
+          setState((s) => ({ ...s, warning: res.error.message }))
+        }
+      }
 
       const made: TrackRig[] = []
       for (const [kind, stream] of Object.entries(streams) as Array<[LaneKind, MediaStream]>) {
@@ -278,7 +293,7 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
 
   const start = useCallback(
     async (opts: StartOptions) => {
-      setState((s) => ({ ...s, phase: 'arming', error: null, elapsedMs: 0 }))
+      setState((s) => ({ ...s, phase: 'arming', error: null, warning: null, elapsedMs: 0 }))
       const streams: Partial<Record<LaneKind, MediaStream>> = {}
       try {
         if (opts.sourceId) streams.screen = await screenStream(opts.sourceId)
@@ -428,6 +443,7 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
         countdown: 0,
         level: 0,
         error: null,
+        warning: null,
         previewScreen: null,
         previewWebcam: null,
         silentSeconds: 0
@@ -466,11 +482,21 @@ export function useRecorder(onFinalized: (recordingId: string) => void) {
       countdown: 0,
       level: 0,
       error: null,
+      warning: null,
       previewScreen: null,
       previewWebcam: null,
       silentSeconds: 0
     })
   }, [teardown])
 
-  return { state, start, stop, pause, resume, cancel, clearError: () => setState((s) => ({ ...s, error: null })) }
+  return {
+    state,
+    start,
+    stop,
+    pause,
+    resume,
+    cancel,
+    clearError: () => setState((s) => ({ ...s, error: null })),
+    clearWarning: () => setState((s) => ({ ...s, warning: null }))
+  }
 }

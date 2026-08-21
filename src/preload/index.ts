@@ -182,7 +182,7 @@ const api = {
     /** Resolves to the chosen action id, or null if the menu was dismissed. */
     recording: (input: { status: string; hasFiles: boolean; x: number; y: number }) =>
       call<string | null>('menu:recording', input),
-    confirmTrash: (input: { title: string; dir: string }) =>
+    confirmTrash: (input: { title: string; dir: string; count?: number }) =>
       call<boolean>('menu:confirmTrash', input)
   },
   search: (q: string) => call<SearchHit[]>('search', q),

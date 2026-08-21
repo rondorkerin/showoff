@@ -1,6 +1,6 @@
 {
   "name": "showoff",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Record your screen and your voice. Get posted-ready clips.",
   "main": "./out/main/index.js",
   "author": "Nick Bryant",
